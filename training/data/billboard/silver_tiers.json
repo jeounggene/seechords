@@ -1,0 +1,592 @@
+{
+  "0004": {
+    "tier": "trusted",
+    "score": 0.9486,
+    "weight": 0.7589
+  },
+  "0022": {
+    "tier": "trusted",
+    "score": 0.8971,
+    "weight": 0.7177
+  },
+  "0059": {
+    "tier": "trusted",
+    "score": 0.9349,
+    "weight": 0.7479
+  },
+  "0071": {
+    "tier": "trusted",
+    "score": 0.7192,
+    "weight": 0.5754
+  },
+  "0085": {
+    "tier": "trusted",
+    "score": 0.9456,
+    "weight": 0.7565
+  },
+  "0097": {
+    "tier": "marginal",
+    "score": 0.6405,
+    "weight": 0.5124
+  },
+  "0122": {
+    "tier": "trusted",
+    "score": 0.7829,
+    "weight": 0.6263
+  },
+  "0127": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0139": {
+    "tier": "trusted",
+    "score": 0.7852,
+    "weight": 0.6282
+  },
+  "0157": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0185": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0192": {
+    "tier": "trusted",
+    "score": 0.8267,
+    "weight": 0.6614
+  },
+  "0205": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0206": {
+    "tier": "trusted",
+    "score": 0.9199,
+    "weight": 0.7359
+  },
+  "0214": {
+    "tier": "trusted",
+    "score": 0.9187,
+    "weight": 0.735
+  },
+  "0240": {
+    "tier": "trusted",
+    "score": 0.9706,
+    "weight": 0.7765
+  },
+  "0241": {
+    "tier": "marginal",
+    "score": 0.6805,
+    "weight": 0.5444
+  },
+  "0251": {
+    "tier": "trusted",
+    "score": 0.9561,
+    "weight": 0.7649
+  },
+  "0267": {
+    "tier": "trusted",
+    "score": 0.9175,
+    "weight": 0.734
+  },
+  "0303": {
+    "tier": "trusted",
+    "score": 0.7725,
+    "weight": 0.618
+  },
+  "0306": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0322": {
+    "tier": "trusted",
+    "score": 0.918,
+    "weight": 0.7344
+  },
+  "0326": {
+    "tier": "trusted",
+    "score": 0.9086,
+    "weight": 0.7269
+  },
+  "0338": {
+    "tier": "trusted",
+    "score": 0.8158,
+    "weight": 0.6526
+  },
+  "0366": {
+    "tier": "trusted",
+    "score": 0.9402,
+    "weight": 0.7522
+  },
+  "0367": {
+    "tier": "trusted",
+    "score": 0.9101,
+    "weight": 0.7281
+  },
+  "0371": {
+    "tier": "trusted",
+    "score": 0.8601,
+    "weight": 0.6881
+  },
+  "0380": {
+    "tier": "trusted",
+    "score": 0.7602,
+    "weight": 0.6082
+  },
+  "0382": {
+    "tier": "marginal",
+    "score": 0.6346,
+    "weight": 0.5077
+  },
+  "0385": {
+    "tier": "trusted",
+    "score": 0.8787,
+    "weight": 0.703
+  },
+  "0396": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0399": {
+    "tier": "marginal",
+    "score": 0.5696,
+    "weight": 0.4557
+  },
+  "0410": {
+    "tier": "trusted",
+    "score": 0.8674,
+    "weight": 0.6939
+  },
+  "0414": {
+    "tier": "trusted",
+    "score": 0.717,
+    "weight": 0.5736
+  },
+  "0421": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0427": {
+    "tier": "marginal",
+    "score": 0.6016,
+    "weight": 0.4813
+  },
+  "0434": {
+    "tier": "trusted",
+    "score": 0.9619,
+    "weight": 0.7695
+  },
+  "0442": {
+    "tier": "trusted",
+    "score": 0.8863,
+    "weight": 0.709
+  },
+  "0464": {
+    "tier": "trusted",
+    "score": 0.9587,
+    "weight": 0.767
+  },
+  "0476": {
+    "tier": "trusted",
+    "score": 0.9208,
+    "weight": 0.7366
+  },
+  "0481": {
+    "tier": "trusted",
+    "score": 0.9514,
+    "weight": 0.7611
+  },
+  "0501": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0506": {
+    "tier": "trusted",
+    "score": 0.9084,
+    "weight": 0.7267
+  },
+  "0507": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0511": {
+    "tier": "trusted",
+    "score": 0.9379,
+    "weight": 0.7503
+  },
+  "0515": {
+    "tier": "trusted",
+    "score": 0.8754,
+    "weight": 0.7003
+  },
+  "0518": {
+    "tier": "trusted",
+    "score": 0.9254,
+    "weight": 0.7403
+  },
+  "0524": {
+    "tier": "trusted",
+    "score": 0.9383,
+    "weight": 0.7506
+  },
+  "0530": {
+    "tier": "trusted",
+    "score": 0.9458,
+    "weight": 0.7566
+  },
+  "0540": {
+    "tier": "trusted",
+    "score": 0.7167,
+    "weight": 0.5734
+  },
+  "0543": {
+    "tier": "marginal",
+    "score": 0.6062,
+    "weight": 0.485
+  },
+  "0547": {
+    "tier": "trusted",
+    "score": 0.7089,
+    "weight": 0.5671
+  },
+  "0553": {
+    "tier": "trusted",
+    "score": 0.8941,
+    "weight": 0.7153
+  },
+  "0588": {
+    "tier": "trusted",
+    "score": 0.7963,
+    "weight": 0.637
+  },
+  "0599": {
+    "tier": "trusted",
+    "score": 0.7325,
+    "weight": 0.586
+  },
+  "0618": {
+    "tier": "trusted",
+    "score": 0.8241,
+    "weight": 0.6593
+  },
+  "0631": {
+    "tier": "trusted",
+    "score": 0.9168,
+    "weight": 0.7334
+  },
+  "0647": {
+    "tier": "trusted",
+    "score": 0.9151,
+    "weight": 0.7321
+  },
+  "0650": {
+    "tier": "trusted",
+    "score": 0.9606,
+    "weight": 0.7685
+  },
+  "0655": {
+    "tier": "trusted",
+    "score": 0.9335,
+    "weight": 0.7468
+  },
+  "0658": {
+    "tier": "trusted",
+    "score": 0.9524,
+    "weight": 0.7619
+  },
+  "0670": {
+    "tier": "trusted",
+    "score": 0.9353,
+    "weight": 0.7482
+  },
+  "0683": {
+    "tier": "trusted",
+    "score": 0.9672,
+    "weight": 0.7738
+  },
+  "0705": {
+    "tier": "trusted",
+    "score": 0.9353,
+    "weight": 0.7482
+  },
+  "0707": {
+    "tier": "trusted",
+    "score": 0.8406,
+    "weight": 0.6725
+  },
+  "0708": {
+    "tier": "trusted",
+    "score": 0.945,
+    "weight": 0.756
+  },
+  "0722": {
+    "tier": "trusted",
+    "score": 0.8065,
+    "weight": 0.6452
+  },
+  "0736": {
+    "tier": "trusted",
+    "score": 0.9749,
+    "weight": 0.7799
+  },
+  "0740": {
+    "tier": "trusted",
+    "score": 0.9267,
+    "weight": 0.7414
+  },
+  "0746": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0787": {
+    "tier": "trusted",
+    "score": 0.8937,
+    "weight": 0.715
+  },
+  "0810": {
+    "tier": "trusted",
+    "score": 0.9309,
+    "weight": 0.7447
+  },
+  "0813": {
+    "tier": "trusted",
+    "score": 0.9426,
+    "weight": 0.7541
+  },
+  "0822": {
+    "tier": "marginal",
+    "score": 0.5515,
+    "weight": 0.4412
+  },
+  "0827": {
+    "tier": "marginal",
+    "score": 0.5338,
+    "weight": 0.427
+  },
+  "0834": {
+    "tier": "trusted",
+    "score": 0.9682,
+    "weight": 0.7746
+  },
+  "0856": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0889": {
+    "tier": "trusted",
+    "score": 0.9677,
+    "weight": 0.7742
+  },
+  "0927": {
+    "tier": "trusted",
+    "score": 0.893,
+    "weight": 0.7144
+  },
+  "0956": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "0978": {
+    "tier": "trusted",
+    "score": 0.8298,
+    "weight": 0.6638
+  },
+  "0982": {
+    "tier": "trusted",
+    "score": 0.7878,
+    "weight": 0.6302
+  },
+  "1003": {
+    "tier": "trusted",
+    "score": 0.7604,
+    "weight": 0.6083
+  },
+  "1007": {
+    "tier": "trusted",
+    "score": 0.9182,
+    "weight": 0.7346
+  },
+  "1012": {
+    "tier": "trusted",
+    "score": 0.9615,
+    "weight": 0.7692
+  },
+  "1013": {
+    "tier": "trusted",
+    "score": 0.9287,
+    "weight": 0.743
+  },
+  "1037": {
+    "tier": "trusted",
+    "score": 0.8946,
+    "weight": 0.7157
+  },
+  "1048": {
+    "tier": "trusted",
+    "score": 0.7905,
+    "weight": 0.6324
+  },
+  "1055": {
+    "tier": "trusted",
+    "score": 0.7956,
+    "weight": 0.6365
+  },
+  "1056": {
+    "tier": "trusted",
+    "score": 0.9158,
+    "weight": 0.7326
+  },
+  "1061": {
+    "tier": "trusted",
+    "score": 0.9675,
+    "weight": 0.774
+  },
+  "1064": {
+    "tier": "trusted",
+    "score": 0.9683,
+    "weight": 0.7746
+  },
+  "1072": {
+    "tier": "trusted",
+    "score": 0.9421,
+    "weight": 0.7537
+  },
+  "1078": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "1082": {
+    "tier": "trusted",
+    "score": 0.7519,
+    "weight": 0.6015
+  },
+  "1085": {
+    "tier": "trusted",
+    "score": 0.9614,
+    "weight": 0.7691
+  },
+  "1114": {
+    "tier": "trusted",
+    "score": 0.924,
+    "weight": 0.7392
+  },
+  "1118": {
+    "tier": "trusted",
+    "score": 0.8972,
+    "weight": 0.7178
+  },
+  "1121": {
+    "tier": "trusted",
+    "score": 0.9645,
+    "weight": 0.7716
+  },
+  "1127": {
+    "tier": "trusted",
+    "score": 0.8038,
+    "weight": 0.643
+  },
+  "1140": {
+    "tier": "trusted",
+    "score": 0.9195,
+    "weight": 0.7356
+  },
+  "1145": {
+    "tier": "trusted",
+    "score": 0.7121,
+    "weight": 0.5697
+  },
+  "1146": {
+    "tier": "trusted",
+    "score": 0.9488,
+    "weight": 0.759
+  },
+  "1161": {
+    "tier": "marginal",
+    "score": 0.6518,
+    "weight": 0.5214
+  },
+  "1167": {
+    "tier": "trusted",
+    "score": 0.9163,
+    "weight": 0.733
+  },
+  "1169": {
+    "tier": "trusted",
+    "score": 0.9042,
+    "weight": 0.7234
+  },
+  "1170": {
+    "tier": "trusted",
+    "score": 0.9286,
+    "weight": 0.7429
+  },
+  "1188": {
+    "tier": "trusted",
+    "score": 0.9047,
+    "weight": 0.7238
+  },
+  "1192": {
+    "tier": "trusted",
+    "score": 0.9325,
+    "weight": 0.746
+  },
+  "1197": {
+    "tier": "trusted",
+    "score": 0.8963,
+    "weight": 0.717
+  },
+  "1200": {
+    "tier": "trusted",
+    "score": 0.9517,
+    "weight": 0.7614
+  },
+  "1221": {
+    "tier": "rejected",
+    "score": 0.0,
+    "weight": 0.0
+  },
+  "1253": {
+    "tier": "trusted",
+    "score": 0.9086,
+    "weight": 0.7269
+  },
+  "1270": {
+    "tier": "trusted",
+    "score": 0.9055,
+    "weight": 0.7244
+  },
+  "1273": {
+    "tier": "trusted",
+    "score": 0.9591,
+    "weight": 0.7673
+  },
+  "1286": {
+    "tier": "trusted",
+    "score": 0.9171,
+    "weight": 0.7337
+  },
+  "1287": {
+    "tier": "trusted",
+    "score": 0.9351,
+    "weight": 0.7481
+  },
+  "1289": {
+    "tier": "trusted",
+    "score": 0.9331,
+    "weight": 0.7465
+  }
+}

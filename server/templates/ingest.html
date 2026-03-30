@@ -1,0 +1,2573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SeeChords – Ingest Chord Sheet</title>
+<style>
+  :root { --bg: #1a1a2e; --card: #16213e; --accent: #0f3460; --hi: #e94560;
+           --ok: #4ecca3; --text: #eee; --dim: #888; --warn: #f0a500; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg);
+         color: var(--text); padding: 20px; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.4em; margin-bottom: 12px; color: var(--hi); }
+  h2 { font-size: 1.1em; margin: 16px 0 8px; color: var(--ok); }
+
+  /* Upload form */
+  .upload-area { background: var(--card); border-radius: 8px; padding: 20px;
+                  margin-bottom: 20px; }
+  .upload-area label { display: block; margin-bottom: 6px; font-size: 0.9em; color: var(--dim); }
+  .upload-area input[type=file], .upload-area textarea, .upload-area input[type=text] {
+    width: 100%; padding: 8px; margin-bottom: 12px; background: var(--accent);
+    border: 1px solid #333; border-radius: 4px; color: var(--text); font-family: inherit;
+    font-size: 0.85em; }
+  .upload-area textarea { height: 120px; resize: vertical; }
+  .row { display: flex; gap: 16px; }
+  .row > div { flex: 1; }
+  button { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer;
+           font-family: inherit; font-size: 0.9em; font-weight: 600; }
+  .btn-primary { background: var(--hi); color: #fff; }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+  .btn-save { background: var(--ok); color: #111; }
+  .btn-save:disabled { opacity: 0.5; cursor: default; }
+
+  /* Status */
+  #status { margin: 12px 0; font-size: 0.9em; }
+  .status-processing { color: var(--warn); }
+  .status-error { color: var(--hi); }
+  .status-done { color: var(--ok); }
+
+  /* Song info */
+  .info-bar { background: var(--card); padding: 10px 16px; border-radius: 6px;
+              margin-bottom: 16px; display: flex; gap: 24px; font-size: 0.85em; }
+  .info-bar span { color: var(--dim); }
+  .info-bar strong { color: var(--text); }
+
+  /* Alignment table */
+  .review-table { width: 100%; border-collapse: collapse; font-size: 0.82em; }
+  .review-table th { background: var(--accent); padding: 6px 8px; text-align: left;
+                      position: sticky; top: 0; z-index: 2; }
+  .review-table td { padding: 5px 8px; border-bottom: 1px solid #222; vertical-align: middle; }
+  .review-table tr:hover { background: rgba(255,255,255,0.03); }
+  .review-table tr.mismatch { background: rgba(233,69,96,0.08); }
+  .review-table tr.playing { background: rgba(78,204,163,0.15); }
+  .match-yes { color: var(--ok); }
+  .match-no { color: var(--hi); }
+
+  /* Editable chord cells */
+  td.chord-cell { cursor: text; }
+  td.chord-cell:focus { outline: 2px solid var(--ok); outline-offset: -2px; }
+
+  /* Audio player */
+  .audio-controls { margin: 12px 0; display: flex; gap: 12px; align-items: center; }
+  audio { flex: 1; height: 32px; }
+
+  /* Footer actions */
+  .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+  #save-status { font-size: 0.85em; margin-left: 12px; }
+
+  .tab-choice { display: flex; gap: 0; margin-bottom: 12px; }
+  .tab-choice button { background: var(--accent); color: var(--dim); border: 1px solid #333;
+                        border-radius: 0; padding: 8px 16px; }
+  .tab-choice button.active { background: var(--hi); color: #fff; border-color: var(--hi); }
+  .tab-choice button:first-child { border-radius: 4px 0 0 4px; }
+  .tab-choice button:last-child { border-radius: 0 4px 4px 0; }
+
+  .hidden { display: none; }
+
+  /* Lyric mode badges */
+  .align-mode-badge { display: inline-block; padding: 3px 10px; border-radius: 12px;
+                       font-size: 0.75em; font-weight: 700; margin-left: 8px; }
+  .badge-lyric { background: #4ecca3; color: #111; }
+  .badge-beat { background: #f0a500; color: #111; }
+  .conf-high { color: var(--ok); }
+  .conf-low { color: var(--warn); }
+  .conf-none { color: var(--hi); }
+  .word-cell { color: #8ab4f8; font-style: italic; font-size: 0.85em; }
+  .section-tag { color: var(--warn); font-size: 0.75em; }
+
+  /* Lyrics line in play-along */
+  .pa-lyric-line { text-align: center; font-size: 1.2em; color: #8ab4f8;
+                    margin: 8px 0 4px; min-height: 1.6em; font-style: italic; }
+  .pa-lyric-word { display: inline; transition: color 0.15s; }
+  .pa-lyric-word.pa-word-active { color: var(--ok); font-weight: 700; font-style: normal; }
+  .pa-lyric-word.pa-word-past { color: var(--dim); }
+
+  /* ── Play-Along Mode (Extension-style) ── */
+  .playalong-wrap {
+    background: #080812; border: 1px solid #2a2a50; border-radius: 12px;
+    margin-top: 20px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  /* Header bar with badges */
+  .pa-header {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+    padding: 10px 14px;
+    background: linear-gradient(135deg, #110d2e 0%, #1a0938 100%);
+    border-bottom: 1px solid #2a2a50;
+  }
+  .pa-header h2 { margin: 0; font-size: 1.2rem; font-weight: 800; color: #fff; margin-right: auto; }
+  .pa-badge { font-size: .85rem; font-weight: 600; padding: 4px 12px; border-radius: 99px;
+              border: 1px solid #2a2a50; white-space: nowrap; }
+  .pa-badge-key { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
+  .pa-badge-bpm { border-color: rgba(108,71,255,.25); color: rgba(180,123,255,.75); }
+  .pa-transpose-controls {
+    display: flex; align-items: center; gap: 4px;
+    background: #1a1a36; border: 1px solid #2a2a50;
+    border-radius: 99px; padding: 2px 8px;
+  }
+  .pa-transpose-btn {
+    background: none; border: none; color: #8888aa;
+    font-size: .9rem; cursor: pointer; padding: 4px 7px;
+    border-radius: 4px; line-height: 1; transition: color .2s, background .2s;
+  }
+  .pa-transpose-btn:hover { color: #fff; background: #2a2a50; }
+  .pa-transpose-label {
+    font-size: .92rem; font-weight: 600; color: #8888aa;
+    min-width: 88px; text-align: center; white-space: nowrap;
+  }
+  .pa-badge-save {
+    border-color: rgba(0,200,100,.25); color: rgba(0,200,100,.75);
+    cursor: pointer; margin-left: auto;
+  }
+  .pa-badge-save:hover { background: rgba(0,200,100,.1); }
+  .pa-badge-history {
+    border-color: rgba(180,123,255,.25); color: rgba(180,123,255,.75);
+    cursor: pointer; position: relative;
+  }
+  .pa-badge-history:hover { background: rgba(180,123,255,.1); }
+  .pa-versions-dropdown {
+    display: none; position: absolute; top: 100%; right: 0; margin-top: 6px;
+    background: #12122a; border: 1px solid #2a2a50; border-radius: 8px;
+    min-width: 280px; max-height: 240px; overflow-y: auto; z-index: 30;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .pa-versions-dropdown.open { display: block; }
+  .pa-version-item {
+    padding: 8px 12px; cursor: pointer; font-size: .78rem;
+    border-bottom: 1px solid #1a1a36; color: #aaa;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .pa-version-item:hover { background: #1a1a36; color: #fff; }
+  .pa-version-item.active { color: #ffd700; background: rgba(255,215,0,.05); }
+  .pa-version-item .v-date { font-size: .65rem; color: #666; }
+  .pa-key-edit {
+    background: #1a1a36; border: 1px solid #6c47ff; border-radius: 4px;
+    color: #ffd700; font-size: .85rem; font-weight: 700;
+    text-align: center; padding: 2px 6px; outline: none; width: 50px;
+  }
+
+  /* 3-card chord display (prev / active / next) */
+  .pa-chord-trio {
+    display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 6px;
+    padding: 12px 14px 8px; background: #0a0a1a;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+  .pa-card {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 14px 8px; border-radius: 8px; background: rgba(255,255,255,.02);
+    border: 1px solid rgba(255,255,255,.06); min-height: 60px;
+    transition: opacity .22s ease;
+  }
+  .pa-card-prev, .pa-card-next { opacity: .35; }
+  .pa-card-active {
+    opacity: 1; border-color: rgba(255,215,0,.35); background: rgba(255,215,0,.05);
+    box-shadow: 0 0 24px rgba(255,165,0,.08);
+  }
+  .pa-card .pa-card-name { font-weight: 700; line-height: 1; letter-spacing: -0.5px; }
+  .pa-card-active .pa-card-name {
+    font-size: 2.6rem; color: #ffd700;
+    text-shadow: 0 0 20px rgba(255,215,0,.55), 0 0 60px rgba(255,215,0,.25);
+  }
+  .pa-card-prev .pa-card-name, .pa-card-next .pa-card-name {
+    font-size: 1.4rem; color: #e0e0ff;
+  }
+  .pa-card .pa-card-label { font-size: .7rem; color: #8888aa; margin-top: 4px; }
+  @keyframes paCardEnter {
+    0%   { transform: scale(.88); opacity: .5; }
+    60%  { transform: scale(1.04); }
+    100% { transform: scale(1);   opacity: 1; }
+  }
+  .pa-card-active.pa-entering { animation: paCardEnter .28s cubic-bezier(.34,1.56,.64,1) forwards; }
+
+  /* Time & countdown strip */
+  .pa-info-strip {
+    display: flex; justify-content: center; align-items: center; gap: 20px;
+    padding: 6px 14px; background: #0a0a1a; font-size: .85rem; color: #8888aa;
+  }
+  .pa-countdown-val { font-size: 1.4em; font-weight: 700; color: var(--warn); min-width: 32px; text-align: center; }
+
+  /* Lyric line */
+  .pa-lyric-line { text-align: center; font-size: 1.15em; color: #8ab4f8;
+                    padding: 6px 14px; min-height: 1.6em; font-style: italic;
+                    background: #0a0a1a; }
+  .pa-lyric-word { display: inline; transition: color 0.15s; }
+  .pa-lyric-word.pa-word-active { color: var(--ok); font-weight: 700; font-style: normal; }
+  .pa-lyric-word.pa-word-past { color: var(--dim); }
+
+  /* ── Line-by-line chord grid ── */
+  .pa-lines-wrap { padding: 12px 14px; background: #0d0d20; }
+  .pa-lines-label {
+    font-size: .75rem; color: #8888aa; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  }
+  .pa-lines-toggle {
+    display: inline-block; transition: transform .2s; font-size: .7rem;
+  }
+  .pa-lines-wrap.collapsed .pa-lines-toggle { transform: rotate(-90deg); }
+  .pa-lines-wrap.collapsed #pa-lines { display: none; }
+  .pa-lines-label button {
+    font-size: .75rem; padding: 3px 10px; border-radius: 4px;
+    background: #1a1a36; border: 1px solid #2a2a50; color: #b47bff; cursor: pointer;
+  }
+  .pa-lines-label button.active { background: #6c47ff; color: #fff; border-color: #6c47ff; }
+  .pa-chord-bank {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 10px 14px; background: #0a0a1a;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+  .pa-chord-bank-label {
+    font-size: .72rem; color: #8888aa; white-space: nowrap; margin-right: 4px;
+  }
+  .pa-bank-chip {
+    background: #1a1a36; border: 1px solid #2a2a50; color: #f2f2ff;
+    border-radius: 999px; padding: 5px 12px; cursor: pointer;
+    font-size: .82rem; font-weight: 700; line-height: 1;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+  .pa-bank-chip:hover { background: #24244a; border-color: #6c47ff; transform: translateY(-1px); }
+  .pa-bank-chip-empty {
+    background: transparent; border-style: dashed; color: #66668a; cursor: default;
+  }
+
+  .pa-line {
+    display: flex; gap: 4px; margin-bottom: 6px; align-items: stretch;
+    border-radius: 6px; border: 2px solid transparent; padding: 2px;
+    transition: border-color .2s, background .2s;
+  }
+  .pa-line.pa-line-active { border-color: rgba(255,215,0,.3); background: rgba(255,215,0,.03); }
+  .pa-line.pa-line-past { opacity: .35; }
+  .pa-line-num {
+    display: flex; align-items: center; justify-content: center; min-width: 28px;
+    font-size: .7rem; color: #555; font-weight: 600;
+  }
+  .pa-block {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 10px 6px; border-radius: 6px; background: #12122a; border: 1px solid #2a2a50;
+    cursor: pointer; transition: all .15s ease; min-height: 48px; position: relative;
+  }
+  .pa-block:hover { border-color: #444; background: #1a1a36; }
+  .pa-block.pa-block-active {
+    background: rgba(255,215,0,.08); border-color: rgba(255,215,0,.5);
+    box-shadow: 0 0 12px rgba(255,215,0,.1);
+  }
+  .pa-block.pa-block-past { opacity: .5; }
+  .pa-block-chord {
+    font-size: 1.3rem; font-weight: 700; color: #e0e0ff; line-height: 1;
+    outline: none; min-width: 40px; text-align: center;
+  }
+  .pa-block-chord:focus { color: #ffd700; }
+  .pa-block.pa-block-active .pa-block-chord { color: #ffd700; }
+  .pa-block-time { font-size: .65rem; color: #555; margin-top: 3px; }
+  .pa-block-beats {
+    position: absolute; bottom: 2px; right: 4px; font-size: .55rem; color: #444;
+  }
+  .pa-block-word { font-size: .65rem; color: #8ab4f8; margin-top: 2px; font-style: italic; }
+
+  /* Progress bar */
+  .pa-progress-wrap { position: relative; height: 6px; background: #1a1a36;
+                       border-radius: 3px; margin: 0 14px; cursor: pointer; }
+  .pa-progress-fill { height: 100%; background: linear-gradient(90deg, #6c47ff, #b47bff);
+                       border-radius: 3px; transition: width 0.1s linear; }
+  .pa-progress-markers { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+  .pa-marker { position: absolute; top: -2px; width: 1px; height: 10px;
+                background: rgba(255,255,255,0.15); }
+
+  /* ── Timeline Editor ── */
+  .pa-timeline-wrap {
+    padding: 8px 14px 4px;
+    background: #0a0a1a;
+    border-top: 1px solid #2a2a50;
+  }
+  .pa-timeline-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 6px; font-size: .75rem; color: #8888aa;
+  }
+  .pa-timeline-header span { flex-shrink: 0; }
+  .pa-timeline-scroll {
+    overflow-x: auto; overflow-y: hidden;
+    position: relative; height: 64px;
+    background: #080812; border-radius: 6px; border: 1px solid #1a1a36;
+  }
+  .pa-timeline-scroll::-webkit-scrollbar { height: 6px; }
+  .pa-timeline-scroll::-webkit-scrollbar-track { background: #0a0a1a; }
+  .pa-timeline-scroll::-webkit-scrollbar-thumb { background: #2a2a50; border-radius: 3px; }
+  .pa-timeline-inner {
+    display: flex; height: 100%; position: relative;
+  }
+  /* Beat blocks (extension-style, fixed 48px per beat) */
+  .pa-beat {
+    flex-shrink: 0; position: relative; width: 48px; height: 100%;
+    border-right: 1px solid rgba(255,255,255,.09); box-sizing: border-box;
+    display: flex; align-items: flex-end; overflow: visible;
+    cursor: pointer; background: transparent; transition: background .15s;
+  }
+  .pa-beat:hover { background: rgba(255,255,255,.06); }
+  .pa-beat.pa-beat-active { background: rgba(255,215,0,.18); }
+  .pa-beat.pa-beat-past { background: rgba(255,255,255,.03); }
+  .pa-beat.pa-measure-start { border-left: 2px solid rgba(255,255,255,.25); }
+  /* Chord name on first beat of chord */
+  .pa-beat-name {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 50%; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 1.15rem; line-height: 1;
+    color: rgba(255,255,255,.7); white-space: nowrap;
+    cursor: text; z-index: 2;
+  }
+  .pa-beat.pa-beat-active .pa-beat-name { color: #ffd700; font-size: 1.25rem; }
+  /* Editable input overlay (shown on click) */
+  .pa-beat-edit {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 50%;
+    background: #1a1a36; border: 1px solid #6c47ff; border-radius: 3px;
+    color: #ffd700; font-size: .85rem; font-weight: 700;
+    text-align: center; padding: 2px; outline: none; z-index: 10;
+  }
+  /* Beat number label */
+  .pa-beat-num {
+    position: absolute; top: 2px; left: 3px;
+    font-size: .5rem; color: #444; pointer-events: none;
+  }
+  /* Delete button on beat */
+  .pa-beat-del {
+    position: absolute; top: 1px; right: 1px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: rgba(255,68,68,.8); color: #fff;
+    font-size: 10px; line-height: 16px; text-align: center;
+    cursor: pointer; z-index: 15; opacity: 0; transition: opacity .15s;
+    pointer-events: none; border: none; padding: 0;
+  }
+  .pa-beat:hover .pa-beat-del { opacity: 1; pointer-events: auto; }
+  /* Playhead */
+  .pa-playhead {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: #ff4466; z-index: 20; pointer-events: none;
+    box-shadow: 0 0 6px rgba(255,68,102,.5);
+  }
+  .pa-playhead::after {
+    content: ''; position: absolute; top: -3px; left: -4px;
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid #ff4466;
+  }
+  /* Padding blocks for centering */
+  .pa-beat-pad { flex-shrink: 0; width: 48px; height: 100%; }
+
+  /* Transport controls – horizontal bar below timeline */
+  .pa-controls {
+    display: flex; gap: 10px; align-items: center; justify-content: center;
+    padding: 8px 14px; flex-wrap: wrap;
+    background: #0a0a1a; border-bottom: 1px solid #2a2a50;
+  }
+  .pa-controls button {
+    padding: 6px 14px; background: #1a1a36; border: 1px solid #2a2a50;
+    color: #e0e0ff; border-radius: 6px; cursor: pointer; font-size: .8rem;
+    transition: background .2s, border-color .2s;
+  }
+  .pa-controls button:hover { background: #2a2a50; border-color: #444; }
+  .pa-controls .pa-btn-play {
+    font-size: 1.3em; width: 48px; height: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; padding: 0;
+    background: #6c47ff; border-color: #6c47ff; color: #fff;
+  }
+  .pa-controls .pa-btn-play:hover { background: #8264ff; }
+  .pa-bpm { font-size: 0.85em; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<h1>🎵 Ingest Chord Sheet → Training Data</h1>
+
+<!-- Upload Section -->
+<div class="upload-area" id="upload-section">
+  <!-- Audio source tabs -->
+  <div class="tab-choice" id="audio-source-tabs">
+    <button class="active" onclick="showAudioTab('file')">Upload MP3</button>
+    <button onclick="showAudioTab('youtube')">YouTube Link</button>
+  </div>
+
+  <div id="audio-file-area" class="row">
+    <div>
+      <label>🎸 Audio file (MP3, WAV, etc.)</label>
+      <input type="file" id="audio-file" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac">
+    </div>
+  </div>
+
+  <div id="audio-youtube-area" class="hidden">
+    <div class="row">
+      <div>
+        <label>🔗 YouTube URL</label>
+        <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
+      </div>
+    </div>
+  </div>
+
+  <label>Song name (optional)</label>
+  <input type="text" id="song-name" placeholder="Artist - Song Title">
+
+  <button class="btn-primary" id="btn-ingest" onclick="startIngest()">
+    Upload &amp; Analyze
+  </button>
+  <div id="status"></div>
+</div>
+
+<!-- Saved Training Data -->
+<div id="saved-labs-section" class="upload-area" style="margin-top:12px;">
+  <h2 style="margin-top:0;">📂 Saved Training Data</h2>
+  <p style="font-size:0.8em; color:var(--dim); margin-bottom:10px;">
+    Songs you've reviewed and saved as .lab files for model training.
+  </p>
+  <div id="saved-labs-list" style="font-size:0.85em;">Loading…</div>
+</div>
+
+<!-- Review Section (hidden until alignment is ready) -->
+<div id="review-section" class="hidden">
+  <h2>Review Aligned Chords</h2>
+  <div class="info-bar" id="info-bar"></div>
+
+  <div class="audio-controls">
+    <audio id="audio-player" controls></audio>
+  </div>
+
+  <p style="font-size:0.78em; color:var(--dim); margin-bottom:8px;">
+    Click any chord cell to edit. Click a row's ▶ to hear that section.
+  </p>
+
+  <div style="max-height:60vh; overflow-y:auto; display:none;">
+    <table class="review-table" id="align-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Time</th>
+          <th>Chord</th>
+          <th id="th-pred">Model Pred</th>
+          <th id="th-word">Beats</th>
+          <th id="th-conf">Match</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="align-body"></tbody>
+    </table>
+  </div>
+
+  <div class="actions">
+    <button class="btn-primary" onclick="togglePlayAlong()" id="btn-playalong" style="display:none">
+      🎸 Play Along Mode
+    </button>
+    <button class="btn-save" id="btn-save" onclick="saveAlignment()">
+      ✅ Approve &amp; Save as Training Data
+    </button>
+    <button class="btn-primary" onclick="resetAll()">↩ Start Over</button>
+    <span id="save-status"></span>
+  </div>
+
+  <!-- Play-Along Mode (Extension-style) -->
+  <div class="playalong-wrap hidden" id="playalong-section">
+
+    <!-- Header with badges -->
+    <div class="pa-header">
+      <h2>🎸 Play Along</h2>
+      <span class="pa-badge" id="pa-back-badge" onclick="closeLabEditor()" style="display:none;background:var(--accent);cursor:pointer;">↩ Back</span>
+      <span class="pa-badge pa-badge-key" id="pa-key-badge" title="Song key (fixed base key)">Key: —</span>
+      <span class="pa-badge pa-badge-bpm" id="pa-bpm-badge">BPM: —</span>
+      <div class="pa-transpose-controls" title="Transpose display (save stays in base key)">
+        <button class="pa-transpose-btn" id="pa-transpose-down" onclick="paTransposeBy(-1)">▼</button>
+        <span class="pa-transpose-label" id="pa-transpose-label">Original</span>
+        <button class="pa-transpose-btn" id="pa-transpose-up" onclick="paTransposeBy(1)">▲</button>
+      </div>
+      <span class="pa-badge" id="pa-save-badge" onclick="paSaveAndVerify()" style="background:#2a6e2a;cursor:pointer;" title="Save to silver training data and promote as verified">💾 Save & Verify</span>
+      <span class="pa-badge pa-badge-history" id="pa-history-badge" onclick="paToggleHistory()">📋 History
+        <div class="pa-versions-dropdown" id="pa-versions-dropdown"></div>
+      </span>
+    </div>
+
+    <!-- Timeline Editor (top, beat-block style) -->
+    <div class="pa-chord-bank" id="pa-chord-bank">
+      <span class="pa-chord-bank-label">Chord Bank</span>
+    </div>
+    <div class="pa-timeline-wrap">
+      <div class="pa-timeline-header">
+        <span>⏱ Beat Timeline — double-click a beat to change chord</span>
+      </div>
+      <div class="pa-timeline-scroll" id="pa-timeline-scroll">
+        <div class="pa-timeline-inner" id="pa-timeline-inner">
+          <div class="pa-playhead" id="pa-playhead"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Transport controls (below timeline) -->
+    <div class="pa-controls">
+      <button onclick="paSkipLine(-1)">⏮ Prev Line</button>
+      <button onclick="paSkip(-5)">⏪ 5s</button>
+      <button class="pa-btn-play" id="pa-play-btn" onclick="paTogglePlay()">▶</button>
+      <button onclick="paSkip(5)">5s ⏩</button>
+      <button onclick="paSkipLine(1)">Next Line ⏭</button>
+    </div>
+
+    <!-- 3-card chord display: prev | active | next -->
+    <div class="pa-chord-trio">
+      <div class="pa-card pa-card-prev" id="pa-card-prev">
+        <span class="pa-card-name"></span>
+        <span class="pa-card-label">prev</span>
+      </div>
+      <div class="pa-card pa-card-active" id="pa-card-active">
+        <span class="pa-card-name">–</span>
+        <span class="pa-card-label"></span>
+      </div>
+      <div class="pa-card pa-card-next" id="pa-card-next">
+        <span class="pa-card-name"></span>
+        <span class="pa-card-label">next</span>
+      </div>
+    </div>
+
+    <!-- Time / countdown -->
+    <div class="pa-info-strip">
+      <span id="pa-time">0:00</span>
+      <span class="pa-countdown-val" id="pa-countdown"></span>
+    </div>
+
+    <!-- Lyric line (lyric mode) -->
+    <div class="pa-lyric-line" id="pa-lyric-line" style="display:none"></div>
+
+    <!-- Line-by-line chord grid (4 chords per line, editable) -->
+    <div class="pa-lines-wrap collapsed">
+      <div class="pa-lines-label" onclick="paToggleChordLines(event)">
+        <span class="pa-lines-toggle">▼</span>
+        <span>Chord Lines</span>
+        <button id="pa-loop-line-btn" onclick="paToggleLoopLine()">Loop Line</button>
+      </div>
+      <div id="pa-lines"></div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="pa-progress-wrap" id="pa-progress-wrap" onclick="seekProgress(event)">
+      <div class="pa-progress-fill" id="pa-progress-fill"></div>
+      <div class="pa-progress-markers" id="pa-progress-markers"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const API = '';  // same origin
+
+let currentJobId = null;
+let currentSegments = [];
+let audioObjectURL = null;
+let currentAlignMode = 'beat';
+let _currentIngestVideoId = null;
+let currentTranscript = [];
+
+// ── Saved Training Data list ──
+async function loadSavedLabs() {
+  const el = document.getElementById('saved-labs-list');
+  try {
+    const res = await fetch(API + '/api/ingest/saved-labs');
+    const labs = await res.json();
+    if (!labs.length) { el.textContent = 'No saved .lab files yet.'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;">';
+    html += '<tr style="color:var(--dim);font-size:0.8em;"><th style="text-align:left;padding:4px 8px;">Song</th><th style="text-align:right;padding:4px 8px;">Segments</th><th style="text-align:right;padding:4px 8px;">Saved</th><th style="padding:4px 8px;"></th></tr>';
+    for (const lab of labs) {
+      const d = new Date(lab.savedAt * 1000);
+      const ts = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      const fn = lab.filename.replace(/'/g, '\'');
+      html += `<tr style="border-bottom:1px solid #222;cursor:pointer;" onclick="openLabEditor('${fn}')">
+        <td style="padding:6px 8px;">${lab.name}</td>
+        <td style="padding:6px 8px;text-align:right;color:var(--dim);">${lab.segments}</td>
+        <td style="padding:6px 8px;text-align:right;color:var(--dim);font-size:0.85em;">${ts}</td>
+        <td style="padding:6px 8px;text-align:right;">
+          <span style="color:var(--ok);font-size:0.85em;">✏️ Edit</span>
+        </td>
+      </tr>`;
+    }
+    html += '</table>';
+    el.innerHTML = html;
+  } catch (e) { el.textContent = 'Error loading saved data.'; }
+}
+document.addEventListener('DOMContentLoaded', loadSavedLabs);
+
+let _labEditorFilename = null;
+let _labEditorSegments = [];
+let _labEditingMode = false;  // true when Play Along is showing a saved .lab
+let _labEditorBpm = null;     // BPM from DB for lab editing
+let _labEditorKey = null;     // key from DB for lab editing
+let _labEditorBeatTimes = null; // beat_times from DB for lab editing
+let _ingestBeatTimes = null;    // beat_times from fresh ingest result
+
+// ── Isophonics ↔ display chord conversion ────────────────
+
+const _ISO_TO_DISPLAY = {
+  'maj': '', 'min': 'm', '7': '7', 'maj7': 'maj7', 'min7': 'm7',
+  'dim': 'dim', 'dim7': 'dim7', 'hdim7': 'm7b5', 'aug': 'aug',
+  'sus2': 'sus2', 'sus4': 'sus4', '6': '6', 'min6': 'm6', '9': '9',
+  'min9': 'm9', '13': '13', '7b13': '7b13', '7add13': '7add13', '9sus4': '9sus4',
+};
+
+function _isoToDisplay(iso) {
+  if (!iso || iso === 'N') return 'N';
+  // Handle bass note: C:maj/E → save /E for later
+  let bass = '';
+  const slashIdx = iso.indexOf('/');
+  if (slashIdx !== -1) { bass = iso.slice(slashIdx); iso = iso.slice(0, slashIdx); }
+  // Split root:quality
+  const colonIdx = iso.indexOf(':');
+  if (colonIdx === -1) return iso + bass;
+  const root = iso.slice(0, colonIdx);
+  const quality = iso.slice(colonIdx + 1);
+  const suffix = _ISO_TO_DISPLAY[quality];
+  if (suffix !== undefined) return root + suffix + bass;
+  return root + quality + bass;  // unknown quality — pass through
+}
+
+const _DISPLAY_QUALITIES = [
+  // Order matters: longer suffixes first to avoid partial matches
+  ['m7b5', ':hdim7'],
+  ['maj7', ':maj7'], ['min7', ':min7'], ['m7', ':min7'], ['dim7', ':dim7'],
+  ['9sus4', ':9sus4'], ['7b13', ':7b13'], ['7add13', ':7add13'], ['m9', ':min9'],
+  ['sus2', ':sus2'], ['sus4', ':sus4'], ['aug', ':aug'], ['dim', ':dim'],
+  ['add9', ':add9'], ['m6', ':min6'], ['13', ':13'], ['7', ':7'], ['9', ':9'], ['6', ':6'],
+  ['m', ':min'],
+];
+const _ROOT_RE = /^[A-G][b#]?/;
+
+function _displayToIso(name) {
+  if (!name || name === 'N') return 'N';
+  if (name.includes(':')) return name;  // already Isophonics
+  // Handle bass note: C/E → save /E
+  let bass = '';
+  const slashIdx = name.search(/\/[A-G]/);
+  if (slashIdx !== -1) { bass = name.slice(slashIdx); name = name.slice(0, slashIdx); }
+  const rootMatch = name.match(_ROOT_RE);
+  if (!rootMatch) return name + bass;
+  const root = rootMatch[0];
+  const suffix = name.slice(root.length);
+  if (!suffix) return root + ':maj' + bass;
+  for (const [display, iso] of _DISPLAY_QUALITIES) {
+    if (suffix === display) return root + iso + bass;
+  }
+  return root + ':' + suffix + bass;  // unknown suffix — pass through as quality
+}
+
+async function openLabEditor(filename) {
+  // Load saved .lab into Play Along mode
+  try {
+    const res = await fetch(API + '/api/ingest/saved-labs/' + encodeURIComponent(filename));
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    _labEditorFilename = filename;
+    _labEditingMode = true;
+    _labEditorBpm = data.bpm || null;
+    _labEditorKey = data.key || null;
+    _labEditorBeatTimes = data.beatTimes || null;
+
+    // Convert Isophonics chords back to simple names for display
+    const segs = data.segments.map(s => {
+      let ch = _isoToDisplay(s.chord);
+      return { start: s.start, end: s.end, chord: ch, sheetChord: ch };
+    });
+    currentSegments = segs;
+
+    // Load audio if available
+    const player = document.getElementById('audio-player');
+    if (data.audioUrl) {
+      player.src = data.audioUrl;
+      paAudioSrc = data.audioUrl;
+      player.load();
+      player.onerror = () => console.error('[LabEditor] Audio load error:', player.error);
+    } else {
+      console.warn('[LabEditor] No audioUrl in response');
+    }
+
+    // Hide upload + saved-labs sections, show review + play along
+    document.getElementById('upload-section').classList.add('hidden');
+    document.getElementById('saved-labs-section').classList.add('hidden');
+    document.getElementById('review-section').classList.remove('hidden');
+    document.getElementById('playalong-section').classList.remove('hidden');
+    document.getElementById('btn-playalong').style.display = 'none';
+    document.getElementById('btn-save').style.display = 'none';
+
+    // Update header — show key/bpm if available from DB
+    if (_labEditorKey) {
+      document.getElementById('pa-key-badge').textContent = `Key: ${_labEditorKey}`;
+      document.getElementById('pa-key-badge').style.display = '';
+    } else {
+      document.getElementById('pa-key-badge').style.display = 'none';
+    }
+    if (_labEditorBpm) {
+      document.getElementById('pa-bpm-badge').textContent = `BPM: ${_labEditorBpm}`;
+      document.getElementById('pa-bpm-badge').style.display = '';
+    } else {
+      document.getElementById('pa-bpm-badge').style.display = 'none';
+    }
+
+    // Update save badge to save back to .lab
+    const saveBadge = document.getElementById('pa-save-badge');
+    saveBadge.onclick = saveLabFromPlayAlong;
+    saveBadge.textContent = '💾 Save .lab';
+
+    // Hide history badge (not relevant for .lab editing)
+    document.getElementById('pa-history-badge').style.display = 'none';
+    // Show back button
+    document.getElementById('pa-back-badge').style.display = '';
+
+    // Init play along grid + beat timeline
+    paActive = true;
+    paLines = [];
+    for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
+      paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
+    }
+    initPlayAlong();
+  } catch (e) { alert('Error loading file: ' + e.message); }
+}
+
+async function saveLabFromPlayAlong() {
+  // Collect current chords from Play Along and save back to .lab
+  if (!_labEditorFilename) return;
+  const segs = currentSegments.map(s => {
+    let chord = s.sheetChord || s.chord || 'N';
+    chord = _displayToIso(chord);
+    return { start: s.start, end: s.end, chord: chord };
+  });
+  try {
+    const res = await fetch(API + '/api/ingest/saved-labs/' + encodeURIComponent(_labEditorFilename), {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        segments: segs,
+        bpm: _labEditorBpm,
+        key: _labEditorKey,
+        beatTimes: _labEditorBeatTimes,
+      }),
+    });
+    const data = await res.json();
+    if (data.saved) {
+      alert(`Saved ${data.segmentCount} segments to ${data.filename}`);
+    } else {
+      alert(data.error || 'Save failed');
+    }
+  } catch (e) { alert('Error saving: ' + e.message); }
+}
+
+function closeLabEditor() {
+  _labEditorFilename = null;
+  _labEditingMode = false;
+  _labEditorBpm = null;
+  _labEditorKey = null;
+  _labEditorBeatTimes = null;
+  // Restore UI
+  document.getElementById('upload-section').classList.remove('hidden');
+  document.getElementById('saved-labs-section').classList.remove('hidden');
+  document.getElementById('review-section').classList.add('hidden');
+  document.getElementById('playalong-section').classList.add('hidden');
+  document.getElementById('btn-playalong').style.display = '';
+  document.getElementById('btn-save').style.display = '';
+  document.getElementById('pa-history-badge').style.display = '';
+  document.getElementById('pa-back-badge').style.display = 'none';
+  document.getElementById('pa-key-badge').style.display = '';
+  document.getElementById('pa-bpm-badge').style.display = '';
+  // Restore save badge
+  const saveBadge = document.getElementById('pa-save-badge');
+  saveBadge.onclick = paSaveAndVerify;
+  saveBadge.textContent = '💾 Save & Verify';
+  if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
+  paActive = false;
+  loadSavedLabs();
+}
+
+let _audioSourceMode = 'file';  // 'file' or 'youtube'
+
+function showAudioTab(mode) {
+  _audioSourceMode = mode;
+  document.getElementById('audio-file-area').classList.toggle('hidden', mode !== 'file');
+  document.getElementById('audio-youtube-area').classList.toggle('hidden', mode !== 'youtube');
+  document.querySelectorAll('#audio-source-tabs button').forEach((b, i) => {
+    b.classList.toggle('active', (i === 0 && mode === 'file') || (i === 1 && mode === 'youtube'));
+  });
+}
+
+function _extractVideoId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+async function startIngest() {
+  const songName = document.getElementById('song-name').value.trim();
+  const statusEl = document.getElementById('status');
+  const btn = document.getElementById('btn-ingest');
+
+  if (_audioSourceMode === 'youtube') {
+    // YouTube mode
+    const ytUrl = document.getElementById('youtube-url').value.trim();
+    const videoId = _extractVideoId(ytUrl);
+    if (!videoId) {
+      statusEl.className = 'status-error';
+      statusEl.textContent = 'Please enter a valid YouTube URL.';
+      return;
+    }
+    _currentIngestVideoId = videoId;
+
+    btn.disabled = true;
+    statusEl.className = 'status-processing';
+    statusEl.textContent = 'Downloading audio from YouTube…';
+
+    const fd = new FormData();
+    fd.append('videoId', videoId);
+    if (songName) fd.append('name', songName);
+
+    if (audioObjectURL) { URL.revokeObjectURL(audioObjectURL); audioObjectURL = null; }
+
+    try {
+      const resp = await fetch(API + '/api/ingest/youtube', { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (!resp.ok) {
+        statusEl.className = 'status-error';
+        statusEl.textContent = data.error || 'Upload failed.';
+        btn.disabled = false;
+        return;
+      }
+      currentJobId = data.jobId;
+      statusEl.textContent = 'Downloading & processing…';
+      pollIngest();
+    } catch (e) {
+      statusEl.className = 'status-error';
+      statusEl.textContent = 'Network error: ' + e.message;
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  // File upload mode
+  const audioInput = document.getElementById('audio-file');
+
+  if (!audioInput.files.length) {
+    statusEl.className = 'status-error';
+    statusEl.textContent = 'Please select an audio file.';
+    return;
+  }
+
+  btn.disabled = true;
+  statusEl.className = 'status-processing';
+  statusEl.textContent = 'Uploading…';
+
+  const fd = new FormData();
+  fd.append('audio', audioInput.files[0]);
+  if (songName) {
+    fd.append('name', songName);
+  }
+
+  // Keep a local URL for the audio player
+  if (audioObjectURL) URL.revokeObjectURL(audioObjectURL);
+  audioObjectURL = URL.createObjectURL(audioInput.files[0]);
+
+  try {
+    const resp = await fetch(API + '/api/ingest', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.className = 'status-error';
+      statusEl.textContent = data.error || 'Upload failed.';
+      btn.disabled = false;
+      return;
+    }
+    currentJobId = data.jobId;
+    statusEl.textContent = 'Processing… (beat detection)';
+    pollIngest();
+  } catch (e) {
+    statusEl.className = 'status-error';
+    statusEl.textContent = 'Network error: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function pollIngest() {
+  const statusEl = document.getElementById('status');
+  const btn = document.getElementById('btn-ingest');
+
+  try {
+    const resp = await fetch(API + '/api/ingest/' + currentJobId);
+    const data = await resp.json();
+
+    if (data.status === 'processing') {
+      statusEl.className = 'status-processing';
+      statusEl.textContent = data.message || 'Processing…';
+      setTimeout(pollIngest, 1500);
+      return;
+    }
+
+    if (data.status === 'error') {
+      statusEl.className = 'status-error';
+      statusEl.textContent = '❌ ' + (data.message || 'Unknown error');
+      btn.disabled = false;
+      return;
+    }
+
+    if (data.status === 'done') {
+      statusEl.className = 'status-done';
+      statusEl.textContent = '✅ Alignment ready — review below.';
+      btn.disabled = false;
+      showReview(data);
+      return;
+    }
+  } catch (e) {
+    statusEl.className = 'status-error';
+    statusEl.textContent = 'Poll error: ' + e.message;
+    btn.disabled = false;
+  }
+}
+
+function showReview(data) {
+  document.getElementById('review-section').classList.remove('hidden');
+
+  currentAlignMode = data.alignMode || 'beat';
+  currentTranscript = data.transcript || [];
+
+  // Info bar
+  const info = document.getElementById('info-bar');
+  const modeBadge = currentAlignMode === 'lyric'
+    ? '<span class="align-mode-badge badge-lyric">LYRIC SYNC</span>'
+    : '<span class="align-mode-badge badge-beat">BEAT ALIGN</span>';
+  info.innerHTML = `
+    <div><span>Song:</span> <strong>${esc(data.songName)}</strong>${modeBadge}</div>
+    <div><span>Key:</span> <strong>${esc(data.key)}</strong></div>
+    <div><span>BPM:</span> <strong>${data.bpm}</strong></div>
+    <div><span>Segments:</span> <strong>${data.segments.length}</strong></div>
+  `;
+
+  // Update table headers based on mode
+  if (currentAlignMode === 'lyric') {
+    document.getElementById('th-pred').textContent = 'Lyric';
+    document.getElementById('th-word').textContent = 'Section';
+    document.getElementById('th-conf').textContent = 'Conf';
+  } else {
+    document.getElementById('th-pred').textContent = 'Model Pred';
+    document.getElementById('th-word').textContent = 'Beats';
+    document.getElementById('th-conf').textContent = 'Match';
+  }
+
+  // Audio player — use blob URL if available, otherwise server-hosted audio
+  const player = document.getElementById('audio-player');
+  if (audioObjectURL) {
+    player.src = audioObjectURL;
+    paAudioSrc = audioObjectURL;
+  } else if (data.audioUrl) {
+    player.src = data.audioUrl;
+    paAudioSrc = data.audioUrl;
+    player.load();
+  }
+
+  // Store beat times from ingest result
+  _ingestBeatTimes = data.beatTimes || null;
+
+  // Build table (hidden) and auto-enter playalong mode
+  currentSegments = data.segments;
+  renderTable();
+
+  // Auto-enter play-along mode
+  if (!paActive) togglePlayAlong();
+}
+
+function renderTable() {
+  const tbody = document.getElementById('align-body');
+  tbody.innerHTML = '';
+  const isLyric = currentAlignMode === 'lyric';
+
+  currentSegments.forEach((seg, i) => {
+    const tr = document.createElement('tr');
+    tr.dataset.index = i;
+
+    const chord = _segmentChordForDisplay(seg);
+
+    if (isLyric) {
+      // Lyric mode: show word, section, confidence
+      const conf = seg.confidence || 0;
+      const confClass = conf >= 0.8 ? 'conf-high' : conf >= 0.3 ? 'conf-low' : 'conf-none';
+      const confLabel = conf >= 0.8 ? '●' : conf >= 0.3 ? '◐' : '○';
+      const word = seg.word || '—';
+      const section = seg.section || '';
+
+      tr.innerHTML = `
+        <td>${i + 1}</td>
+        <td>${seg.start.toFixed(1)}–${seg.end.toFixed(1)}</td>
+        <td class="chord-cell" contenteditable="true" data-idx="${i}">${esc(chord)}</td>
+        <td class="word-cell">${esc(word)}</td>
+        <td class="section-tag">${esc(section)}</td>
+        <td class="${confClass}">${confLabel}</td>
+        <td><button style="background:none;border:none;color:var(--ok);cursor:pointer;font-size:1.1em"
+                    onclick="playSegment(${seg.start}, ${seg.end})">▶</button></td>
+      `;
+    } else {
+      // Beat mode: original display
+      const pred = seg.predChord && seg.predChord !== 'N' ? seg.predChord : '—';
+      const matchClass = seg.match ? 'match-yes' : 'match-no';
+      const matchIcon = seg.match ? '✓' : '✗';
+      if (!seg.match) tr.classList.add('mismatch');
+
+      tr.innerHTML = `
+        <td>${i + 1}</td>
+        <td>${seg.start.toFixed(1)}–${seg.end.toFixed(1)}</td>
+        <td class="chord-cell" contenteditable="true" data-idx="${i}">${esc(chord)}</td>
+        <td style="color:var(--dim)">${esc(pred)}</td>
+        <td>${seg.nBeats}</td>
+        <td class="${matchClass}">${matchIcon}</td>
+        <td><button style="background:none;border:none;color:var(--ok);cursor:pointer;font-size:1.1em"
+                    onclick="playSegment(${seg.start}, ${seg.end})">▶</button></td>
+      `;
+    }
+    tbody.appendChild(tr);
+  });
+
+  // Listen for chord edits
+  tbody.querySelectorAll('.chord-cell').forEach(td => {
+    td.addEventListener('blur', function() {
+      const idx = parseInt(this.dataset.idx);
+      const newChord = this.textContent.trim();
+      if (currentSegments[idx]) {
+        currentSegments[idx].sheetChord = newChord || '';
+        currentSegments[idx].chord = newChord || '';
+      }
+    });
+    td.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
+    });
+  });
+}
+
+function playSegment(start, end) {
+  const player = document.getElementById('audio-player');
+  player.currentTime = start;
+  player.play();
+  // Highlight current segment while playing
+  const checkEnd = setInterval(() => {
+    if (player.currentTime >= end || player.paused) {
+      if (player.currentTime >= end) player.pause();
+      clearInterval(checkEnd);
+      document.querySelectorAll('.review-table tr.playing').forEach(r =>
+        r.classList.remove('playing'));
+    }
+  }, 100);
+  // Highlight the row
+  document.querySelectorAll('.review-table tr.playing').forEach(r =>
+    r.classList.remove('playing'));
+  const rows = document.querySelectorAll('#align-body tr');
+  rows.forEach(r => {
+    const idx = parseInt(r.dataset.index);
+    if (currentSegments[idx] &&
+        currentSegments[idx].start <= start + 0.01 &&
+        currentSegments[idx].end >= end - 0.01) {
+      r.classList.add('playing');
+    }
+  });
+}
+
+async function saveAlignment() {
+  const saveBtn = document.getElementById('btn-save');
+  const statusEl = document.getElementById('save-status');
+  saveBtn.disabled = true;
+  statusEl.textContent = 'Saving…';
+  statusEl.style.color = 'var(--warn)';
+
+  // Re-detect base key from edited chords before save.
+  paRedetectKeyFromSegments();
+
+  // Build segments for save — use the (possibly edited) sheetChord
+  const segments = _resolveSegmentsForSave(currentSegments);
+
+  const songName = document.getElementById('song-name').value.trim()
+    || document.querySelector('#info-bar strong')?.textContent
+    || 'unknown';
+
+  try {
+    const resp = await fetch(API + '/api/ingest/' + currentJobId + '/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments, songName }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.textContent = '❌ ' + (data.error || 'Save failed.');
+      statusEl.style.color = 'var(--hi)';
+      saveBtn.disabled = false;
+      return;
+    }
+    statusEl.textContent = `✅ Saved! ${data.segmentCount} segments → ${data.songName}.lab`;
+    statusEl.style.color = 'var(--ok)';
+  } catch (e) {
+    statusEl.textContent = '❌ Network error: ' + e.message;
+    statusEl.style.color = 'var(--hi)';
+    saveBtn.disabled = false;
+  }
+}
+
+function resetAll() {
+  document.getElementById('review-section').classList.add('hidden');
+  document.getElementById('playalong-section').classList.add('hidden');
+  document.getElementById('btn-playalong').style.display = 'none';
+  document.getElementById('status').textContent = '';
+  document.getElementById('audio-file').value = '';
+  paActive = false;
+  if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
+  currentJobId = null;
+  currentSegments = [];
+  currentAlignMode = 'beat';
+  currentTranscript = [];
+  _ingestBeatTimes = null;
+  paCurrentIdx = -1;
+  paCurrentLineIdx = -1;
+  paLoopLine = false;
+  paLines = [];
+  if (audioObjectURL) {
+    URL.revokeObjectURL(audioObjectURL);
+    audioObjectURL = null;
+  }
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function _segmentChordForDisplay(seg) {
+  const sheet = typeof seg?.sheetChord === 'string' ? seg.sheetChord.trim() : '';
+  if (sheet) return sheet;
+  const chord = typeof seg?.chord === 'string' ? seg.chord.trim() : '';
+  if (chord) return chord;
+  return '';
+}
+
+// ─── Play-Along Mode ───────────────────────────────────
+
+let paActive = false;
+let paAnimFrame = null;
+let paCurrentIdx = -1;
+let paCurrentLineIdx = -1;
+let paLoopLine = false;
+let paLines = [];        // [{startIdx, endIdx}, …] — groups of 4 segments
+const PA_CHORDS_PER_LINE = 4;
+let paCurrentKey = '?';          // display key (user-shifted)
+let paBaseKey = '?';             // original key used for saving
+let paTransposeSemitones = 0;    // display = base + semitones
+let paAudioSrc = '';             // stable audio source across history loads
+
+// Timeline editor state (beat-block approach)
+let paBeatTimes = [];            // time of each beat
+let paBeatChords = [];           // chord name for each beat (empty string = continuation)
+let paCurrentBeatIdx = -1;       // currently playing beat index
+
+function paChordBankValues() {
+  const seen = new Set();
+  const chords = [];
+  currentSegments.forEach(seg => {
+    const chord = _segmentChordForDisplay(seg);
+    if (!chord || seen.has(chord)) return;
+    seen.add(chord);
+    chords.push(chord);
+  });
+  return chords;
+}
+
+function paResolveIndicatorBeat() {
+  if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
+    return paCurrentBeatIdx;
+  }
+  const player = document.getElementById('audio-player');
+  const t = Number(player?.currentTime || 0);
+  let beatIdx = 0;
+  for (let i = paBeatTimes.length - 1; i >= 0; i--) {
+    if (t >= paBeatTimes[i]) {
+      beatIdx = i;
+      break;
+    }
+  }
+  return Math.max(0, Math.min(beatIdx, Math.max(0, paBeatTimes.length - 1)));
+}
+
+function paInsertChordFromBank(baseChord) {
+  if (!baseChord || !paBeatTimes.length) return;
+  const beatIdx = paResolveIndicatorBeat();
+  paBeatChords[beatIdx] = baseChord;
+  paBeatsToSegments();
+  paBuildBeatTimeline();
+  initPlayAlongGrid();
+  paCurrentBeatIdx = beatIdx;
+  requestAnimationFrame(() => paCenterBeatInTimeline(beatIdx));
+  paCurrentIdx = -1;
+  paUpdate();
+}
+
+function paRenderChordBank() {
+  const bankEl = document.getElementById('pa-chord-bank');
+  if (!bankEl) return;
+  bankEl.innerHTML = '<span class="pa-chord-bank-label">Chord Bank</span>';
+
+  const chords = paChordBankValues();
+  if (!chords.length) {
+    const empty = document.createElement('span');
+    empty.className = 'pa-bank-chip pa-bank-chip-empty';
+    empty.textContent = 'Add a chord below, then reuse it here';
+    bankEl.appendChild(empty);
+    return;
+  }
+
+  chords.forEach(baseChord => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pa-bank-chip';
+    btn.textContent = paToDisplayChord(baseChord);
+    btn.title = 'Insert at the current indicator beat';
+    btn.addEventListener('click', () => paInsertChordFromBank(baseChord));
+    bankEl.appendChild(btn);
+  });
+}
+
+const _NOTE_TO_PC = {
+  C: 0, 'B#': 0,
+  'C#': 1, Db: 1,
+  D: 2,
+  'D#': 3, Eb: 3,
+  E: 4, Fb: 4,
+  F: 5, 'E#': 5,
+  'F#': 6, Gb: 6,
+  G: 7,
+  'G#': 8, Ab: 8,
+  A: 9,
+  'A#': 10, Bb: 10,
+  B: 11, Cb: 11,
+};
+
+const _PC_TO_NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function _normalizeAccidental(s) {
+  return (s || '').replace(/♯/g, '#').replace(/♭/g, 'b');
+}
+
+function _normalizeNoteToken(note) {
+  if (!note) return null;
+  const t = _normalizeAccidental(note.trim());
+  const m = t.match(/^([A-Ga-g])([#b]?)$/);
+  if (!m) return null;
+  return m[1].toUpperCase() + (m[2] || '');
+}
+
+function _pcForNote(note) {
+  const n = _normalizeNoteToken(note);
+  if (!n) return null;
+  return Number.isFinite(_NOTE_TO_PC[n]) ? _NOTE_TO_PC[n] : null;
+}
+
+function _transposeNoteToken(note, semitones) {
+  const pc = _pcForNote(note);
+  if (pc === null) return note;
+  const out = (pc + semitones % 12 + 12) % 12;
+  return _PC_TO_NOTE[out];
+}
+
+function paTransposeChord(chord, semitones) {
+  if (!chord || chord === 'N' || !semitones) return chord;
+
+  let out = chord;
+  out = out.replace(/^([A-Ga-g])([#b♯♭]?)/, (_, a, b) => _transposeNoteToken(a + (b || ''), semitones));
+  out = out.replace(/\/([A-Ga-g])([#b♯♭]?)/g, (_, a, b) => '/' + _transposeNoteToken(a + (b || ''), semitones));
+  return out;
+}
+
+function paToDisplayChord(baseChord) {
+  if (!baseChord) return '';
+  if (baseChord === 'N') return 'N';
+  return paTransposeChord(baseChord, paTransposeSemitones);
+}
+
+function paToBaseChord(displayChord) {
+  return paTransposeChord(displayChord, -paTransposeSemitones);
+}
+
+function _extractKeyRoot(keyLabel) {
+  const m = _normalizeAccidental((keyLabel || '').trim()).match(/^([A-Ga-g])([#b]?)/);
+  if (!m) return null;
+  return m[1].toUpperCase() + (m[2] || '');
+}
+
+function _signedSemitoneDiff(fromPc, toPc) {
+  let d = (toPc - fromPc + 12) % 12;
+  if (d > 6) d -= 12;
+  return d;
+}
+
+function _parseRootQuality(chord) {
+  if (!chord || chord === 'N') return null;
+  const main = chord.split('/')[0].trim();
+  const m = main.match(/^([A-Ga-g])([#b♯♭]?)(.*)$/);
+  if (!m) return null;
+  const root = (m[1].toUpperCase() + (m[2] || '')).replace('♯', '#').replace('♭', 'b');
+  const suffix = (m[3] || '').toLowerCase();
+
+  let quality = 'maj';
+  if (suffix.startsWith('m') && !suffix.startsWith('maj')) quality = 'min';
+  if (suffix.startsWith('dim') || suffix.includes('m7b5')) quality = 'dim';
+  if (suffix.startsWith('aug')) quality = 'aug';
+  if (suffix.startsWith('sus')) quality = 'sus';
+
+  return { root, quality };
+}
+
+function paInferKeyFromSegments(segments) {
+  if (!segments || !segments.length) return null;
+
+  const MAJ_DEG = [0, 2, 4, 5, 7, 9, 11];
+  const NAT_MIN_DEG = [0, 2, 3, 5, 7, 8, 10];
+  let best = { score: -1, key: null };
+
+  for (let tonic = 0; tonic < 12; tonic++) {
+    let majScore = 0;
+    let minScore = 0;
+
+    for (const s of segments) {
+      const chord = s.sheetChord || s.chord || 'N';
+      const parsed = _parseRootQuality(chord);
+      if (!parsed) continue;
+      const rootPc = _pcForNote(parsed.root);
+      if (rootPc === null) continue;
+      const deg = (rootPc - tonic + 12) % 12;
+      const dur = Math.max(0.05, Number(s.end) - Number(s.start) || 0.5);
+      const isMajDiatonic = MAJ_DEG.includes(deg);
+      const isMinDiatonic = NAT_MIN_DEG.includes(deg);
+
+      // Prefer diatonic fit; weight quality compatibility.
+      if (isMajDiatonic) {
+        let w = 1.0;
+        if (parsed.quality === 'maj') w = 1.2;
+        else if (parsed.quality === 'min' || parsed.quality === 'dim') w = 0.85;
+        majScore += dur * w;
+      }
+      if (isMinDiatonic) {
+        let w = 1.0;
+        if (parsed.quality === 'min') w = 1.2;
+        else if (parsed.quality === 'maj' || parsed.quality === 'dim') w = 0.85;
+        minScore += dur * w;
+      }
+
+      // Tonic and dominant emphasis helps stabilize estimate.
+      if (deg === 0) {
+        if (parsed.quality === 'maj') majScore += dur * 0.45;
+        if (parsed.quality === 'min') minScore += dur * 0.45;
+      }
+      if (deg === 7) {
+        majScore += dur * 0.2;
+        minScore += dur * 0.2;
+      }
+    }
+
+    const tonicName = _PC_TO_NOTE[tonic];
+    if (majScore > best.score) best = { score: majScore, key: tonicName };
+    if (minScore > best.score) best = { score: minScore, key: tonicName + 'm' };
+  }
+
+  return best.key;
+}
+
+function paRedetectKeyFromSegments() {
+  const inferred = paInferKeyFromSegments(currentSegments);
+  if (!inferred) return;
+  paBaseKey = inferred;
+  paCurrentKey = paTransposeSemitones === 0 ? inferred : paCurrentKey;
+  paRenderKeyBadge();
+}
+
+function paRenderKeyBadge() {
+  const badge = document.getElementById('pa-key-badge');
+  if (!badge) return;
+  const shownKey = paTransposeChord(paBaseKey || '?', paTransposeSemitones);
+  badge.textContent = `Key: ${shownKey}`;
+}
+
+function paRenderTransposeLabel() {
+  const el = document.getElementById('pa-transpose-label');
+  if (!el) return;
+  const tt = paTransposeSemitones;
+  const capo = tt < 0 ? Math.abs(tt) : 0;
+  if (tt === 0) {
+    el.textContent = 'Original';
+  } else if (tt > 0) {
+    el.textContent = `▲${tt}`;
+  } else {
+    el.textContent = `▼${Math.abs(tt)} (Capo ${capo})`;
+  }
+}
+
+function paTransposeBy(delta) {
+  paTransposeSemitones += delta;
+  paRenderTransposeLabel();
+  paRenderKeyBadge();
+  paRenderChordBank();
+  initPlayAlongGrid();
+  paRenderBeatTimeline();
+  paCurrentIdx = -1;
+  paUpdate();
+}
+
+function togglePlayAlong() {
+  const section = document.getElementById('playalong-section');
+  paActive = !paActive;
+  if (paActive) {
+    section.classList.remove('hidden');
+    document.getElementById('btn-playalong').textContent = '📋 Back to Table';
+    initPlayAlong();
+  } else {
+    section.classList.add('hidden');
+    document.getElementById('btn-playalong').textContent = '🎸 Play Along Mode';
+    if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
+  }
+}
+
+function initPlayAlong() {
+  const segs = currentSegments;
+  if (!segs.length) return;
+
+  // Header badges — use lab editor metadata if available
+  let key, bpmVal;
+  if (_labEditingMode && _labEditorKey) {
+    key = _labEditorKey;
+    bpmVal = _labEditorBpm ? String(_labEditorBpm) : '?';
+  } else {
+    const infoStrong = document.querySelectorAll('#info-bar strong');
+    key = infoStrong[1]?.textContent || '?';
+    bpmVal = infoStrong[2]?.textContent || '?';
+  }
+  paBaseKey = key;
+  paCurrentKey = key;
+  paTransposeSemitones = 0;
+  paRenderKeyBadge();
+  paRenderTransposeLabel();
+  paRenderChordBank();
+  document.getElementById('pa-bpm-badge').textContent = `BPM: ${bpmVal}`;
+
+  // Build lines (groups of PA_CHORDS_PER_LINE)
+  paLines = [];
+  for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
+    paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
+  }
+
+  // Render chord line grid
+  const linesEl = document.getElementById('pa-lines');
+  linesEl.innerHTML = '';
+  paLines.forEach((line, li) => {
+    const row = document.createElement('div');
+    row.className = 'pa-line';
+    row.dataset.line = li;
+
+    // Line number
+    const numEl = document.createElement('div');
+    numEl.className = 'pa-line-num';
+    numEl.textContent = li + 1;
+    numEl.title = 'Click to play this line';
+    numEl.style.cursor = 'pointer';
+    numEl.onclick = () => paJumpToLine(li);
+    row.appendChild(numEl);
+
+    // Chord blocks
+    for (let si = line.startIdx; si <= line.endIdx; si++) {
+      const seg = segs[si];
+      const block = document.createElement('div');
+      block.className = 'pa-block';
+      block.dataset.idx = si;
+      block.onclick = () => paJumpTo(si);
+
+      const chord = _segmentChordForDisplay(seg);
+
+      // Editable chord name
+      const nameEl = document.createElement('div');
+      nameEl.className = 'pa-block-chord';
+      nameEl.contentEditable = 'true';
+      nameEl.textContent = paToDisplayChord(chord);
+      nameEl.addEventListener('blur', function() {
+        const displayChord = this.textContent.trim();
+        const newChord = paToBaseChord(displayChord);
+        if (currentSegments[si]) {
+          currentSegments[si].sheetChord = newChord || '';
+          currentSegments[si].chord = newChord || '';
+        }
+      });
+      nameEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
+      });
+      nameEl.addEventListener('click', function(e) { e.stopPropagation(); });
+      block.appendChild(nameEl);
+
+      // Time label
+      const timeEl = document.createElement('div');
+      timeEl.className = 'pa-block-time';
+      timeEl.textContent = formatTime(seg.start);
+      block.appendChild(timeEl);
+
+      // Word label (lyric mode)
+      if (currentAlignMode === 'lyric' && seg.word) {
+        const wordEl = document.createElement('div');
+        wordEl.className = 'pa-block-word';
+        wordEl.textContent = seg.word;
+        block.appendChild(wordEl);
+      }
+
+      row.appendChild(block);
+    }
+
+    // Pad empty slots if line has fewer than PA_CHORDS_PER_LINE
+    const count = line.endIdx - line.startIdx + 1;
+    for (let p = count; p < PA_CHORDS_PER_LINE; p++) {
+      const pad = document.createElement('div');
+      pad.className = 'pa-block';
+      pad.style.opacity = '0.15';
+      pad.style.cursor = 'default';
+      row.appendChild(pad);
+    }
+
+    linesEl.appendChild(row);
+  });
+
+  // Build progress markers
+  const markers = document.getElementById('pa-progress-markers');
+  markers.innerHTML = '';
+  const totalDur = segs[segs.length - 1].end;
+  segs.forEach(seg => {
+    const mark = document.createElement('div');
+    mark.className = 'pa-marker';
+    mark.style.left = (seg.start / totalDur * 100) + '%';
+    markers.appendChild(mark);
+  });
+
+  // Build beat-block timeline
+  paBuildBeatTimeline();
+
+  // Reset state
+  paCurrentIdx = -1;
+  paCurrentLineIdx = -1;
+  paLoopLine = false;
+  document.getElementById('pa-loop-line-btn').classList.remove('active');
+  paUpdate();
+}
+
+function paUpdate() {
+  const player = document.getElementById('audio-player');
+  const segs = currentSegments;
+  if (!segs.length) return;
+
+  const t = player.currentTime;
+  const totalDur = segs[segs.length - 1].end;
+
+  // Find active segment
+  let idx = -1;
+  for (let i = 0; i < segs.length; i++) {
+    if (t >= segs[i].start && t < segs[i].end) { idx = i; break; }
+  }
+  if (idx === -1 && t >= segs[segs.length - 1].start) idx = segs.length - 1;
+
+  // Find which line the active segment is in
+  let lineIdx = -1;
+  if (idx >= 0) {
+    lineIdx = Math.floor(idx / PA_CHORDS_PER_LINE);
+  }
+
+  // Loop-line: if we've crossed into the next line, jump back
+  if (paLoopLine && paCurrentLineIdx >= 0 && lineIdx !== paCurrentLineIdx && !player.paused) {
+    const loopLine = paLines[paCurrentLineIdx];
+    if (loopLine) {
+      player.currentTime = segs[loopLine.startIdx].start;
+      paAnimFrame = requestAnimationFrame(paUpdate);
+      return;
+    }
+  }
+
+  // ── Update 3-card display ──
+  const prevCard = document.getElementById('pa-card-prev');
+  const activeCard = document.getElementById('pa-card-active');
+  const nextCard = document.getElementById('pa-card-next');
+
+  if (idx >= 0) {
+    const chord = _segmentChordForDisplay(segs[idx]);
+    const prevChord = idx > 0 ? _segmentChordForDisplay(segs[idx - 1]) : '';
+    const nextChord = idx < segs.length - 1 ? _segmentChordForDisplay(segs[idx + 1]) : '';
+
+    prevCard.querySelector('.pa-card-name').textContent = paToDisplayChord(prevChord);
+    nextCard.querySelector('.pa-card-name').textContent = paToDisplayChord(nextChord);
+
+    if (idx !== paCurrentIdx) {
+      activeCard.querySelector('.pa-card-name').textContent = paToDisplayChord(chord);
+      activeCard.classList.remove('pa-entering');
+      void activeCard.offsetWidth;
+      activeCard.classList.add('pa-entering');
+      paCurrentIdx = idx;
+    }
+
+    const remaining = Math.max(0, segs[idx].end - t);
+    document.getElementById('pa-time').textContent = formatTime(t) + '  •  next in ' + remaining.toFixed(1) + 's';
+
+    // Countdown
+    const cdEl = document.getElementById('pa-countdown');
+    if (remaining <= 2.0 && idx < segs.length - 1) {
+      cdEl.textContent = remaining.toFixed(1);
+      cdEl.style.color = remaining <= 0.5 ? 'var(--hi)' : 'var(--warn)';
+    } else {
+      cdEl.textContent = '';
+    }
+  } else {
+    prevCard.querySelector('.pa-card-name').textContent = '';
+    activeCard.querySelector('.pa-card-name').textContent = '–';
+    nextCard.querySelector('.pa-card-name').textContent = '';
+    document.getElementById('pa-time').textContent = formatTime(t);
+    document.getElementById('pa-countdown').textContent = '';
+    paCurrentIdx = -1;
+  }
+
+  // ── Update line-by-line grid ──
+  const lineEls = document.querySelectorAll('#pa-lines .pa-line');
+  lineEls.forEach((el, li) => {
+    el.classList.remove('pa-line-active', 'pa-line-past');
+    if (li === lineIdx) el.classList.add('pa-line-active');
+    else if (li < lineIdx) el.classList.add('pa-line-past');
+  });
+
+  // Update blocks
+  const blocks = document.querySelectorAll('#pa-lines .pa-block[data-idx]');
+  blocks.forEach(block => {
+    const si = parseInt(block.dataset.idx);
+    block.classList.remove('pa-block-active', 'pa-block-past');
+    if (si === idx) block.classList.add('pa-block-active');
+    else if (si < idx) block.classList.add('pa-block-past');
+  });
+
+  // Auto-scroll to active line
+  if (lineIdx >= 0 && lineIdx !== paCurrentLineIdx) {
+    paCurrentLineIdx = lineIdx;
+    const activeLine = lineEls[lineIdx];
+    if (activeLine) {
+      activeLine.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
+  // ── Progress bar ──
+  document.getElementById('pa-progress-fill').style.width =
+    (t / totalDur * 100).toFixed(2) + '%';
+
+  // ── Lyric line (lyric mode only) ──
+  const lyricLine = document.getElementById('pa-lyric-line');
+  if (lyricLine) {
+    if (currentAlignMode === 'lyric' && currentTranscript.length) {
+      lyricLine.style.display = '';
+      let wordIdx = -1;
+      for (let i = 0; i < currentTranscript.length; i++) {
+        if (t >= currentTranscript[i].start && t < currentTranscript[i].end) {
+          wordIdx = i; break;
+        }
+      }
+      const WINDOW = 8;
+      const center = wordIdx >= 0 ? wordIdx : 0;
+      const wStart = Math.max(0, center - WINDOW);
+      const wEnd = Math.min(currentTranscript.length, center + WINDOW + 1);
+      lyricLine.innerHTML = '';
+      for (let i = wStart; i < wEnd; i++) {
+        const span = document.createElement('span');
+        span.className = 'pa-lyric-word';
+        if (i === wordIdx) span.classList.add('pa-word-active');
+        else if (i < wordIdx) span.classList.add('pa-word-past');
+        span.textContent = currentTranscript[i].word + ' ';
+        lyricLine.appendChild(span);
+      }
+    } else {
+      lyricLine.style.display = 'none';
+    }
+  }
+
+  // ── Play button state ──
+  document.getElementById('pa-play-btn').textContent = player.paused ? '▶' : '⏸';
+
+  // ── Update beat-block timeline ──
+  paUpdatePlayhead();
+  // Find active beat
+  let activeBeat = -1;
+  for (let bi = paBeatTimes.length - 1; bi >= 0; bi--) {
+    if (t >= paBeatTimes[bi]) { activeBeat = bi; break; }
+  }
+  if (activeBeat !== paCurrentBeatIdx) {
+    paCurrentBeatIdx = activeBeat;
+    const beats = document.querySelectorAll('#pa-timeline-inner .pa-beat');
+    beats.forEach(b => {
+      const bi = parseInt(b.dataset.bi);
+      b.classList.remove('pa-beat-active', 'pa-beat-past');
+      if (bi === activeBeat) b.classList.add('pa-beat-active');
+      else if (bi < activeBeat) b.classList.add('pa-beat-past');
+    });
+    // Auto-scroll active beat into view
+    const activeEl = document.querySelector(`.pa-beat[data-bi="${activeBeat}"]`);
+    if (activeEl) activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
+
+  paAnimFrame = requestAnimationFrame(paUpdate);
+}
+
+function paTogglePlay() {
+  const player = document.getElementById('audio-player');
+  if ((!player.src || player.src === window.location.href) && paAudioSrc) {
+    player.src = paAudioSrc;
+    player.load();
+  }
+  if (!player.src || player.src === window.location.href) {
+    alert('No audio source loaded for this song. Open it from Saved .lab first.');
+    return;
+  }
+  if (player.paused) {
+    const p = player.play();
+    if (p) p.catch(e => {
+      console.error('[PlayAlong] play() rejected:', e.message);
+      // If not loaded yet, wait for canplay then retry
+      if (player.readyState < 2) {
+        player.addEventListener('canplay', () => player.play(), { once: true });
+      }
+    });
+  }
+  else player.pause();
+}
+
+function paSkip(sec) {
+  const player = document.getElementById('audio-player');
+  player.currentTime = Math.max(0, player.currentTime + sec);
+}
+
+function paJumpTo(idx) {
+  const player = document.getElementById('audio-player');
+  if (currentSegments[idx]) {
+    player.currentTime = currentSegments[idx].start;
+    if (player.paused) player.play();
+  }
+}
+
+function paJumpToLine(lineIdx) {
+  if (!paLines[lineIdx]) return;
+  const seg = currentSegments[paLines[lineIdx].startIdx];
+  if (!seg) return;
+  const player = document.getElementById('audio-player');
+  player.currentTime = seg.start;
+  paCurrentLineIdx = lineIdx;
+  if (player.paused) player.play();
+}
+
+function paSkipLine(dir) {
+  const newLine = Math.max(0, Math.min(paLines.length - 1, paCurrentLineIdx + dir));
+  paJumpToLine(newLine);
+}
+
+function paToggleChordLines(e) {
+  // Don't collapse when clicking the Loop Line button
+  if (e.target.tagName === 'BUTTON') return;
+  document.querySelector('.pa-lines-wrap').classList.toggle('collapsed');
+}
+
+function paToggleLoopLine() {
+  paLoopLine = !paLoopLine;
+  const btn = document.getElementById('pa-loop-line-btn');
+  btn.classList.toggle('active', paLoopLine);
+}
+
+function seekProgress(e) {
+  const bar = document.getElementById('pa-progress-wrap');
+  const rect = bar.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  const totalDur = currentSegments[currentSegments.length - 1]?.end || 1;
+  document.getElementById('audio-player').currentTime = pct * totalDur;
+}
+
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m + ':' + (sec < 10 ? '0' : '') + sec;
+}
+
+// ─── Beat-Block Timeline ────────────────────────────────
+
+function paBuildBeatTimeline() {
+  const segs = currentSegments;
+  if (!segs.length) return;
+
+  // Use lab editor beat_times if available, otherwise generate from BPM
+  let bpm;
+  if (_labEditingMode && _labEditorBpm) {
+    bpm = _labEditorBpm;
+  } else {
+    const infoStrong = document.querySelectorAll('#info-bar strong');
+    bpm = parseFloat(infoStrong[2]?.textContent) || 120;
+  }
+  const beatInterval = 60 / bpm;
+  const totalDur = segs[segs.length - 1].end;
+
+  // Use DB beat_times or ingest beat_times if available, otherwise generate from BPM
+  if (_labEditingMode && _labEditorBeatTimes && _labEditorBeatTimes.length) {
+    paBeatTimes = _labEditorBeatTimes.filter(t => t < totalDur);
+  } else if (_ingestBeatTimes && _ingestBeatTimes.length) {
+    paBeatTimes = _ingestBeatTimes.filter(t => t < totalDur);
+  } else {
+    paBeatTimes = [];
+    for (let t = 0; t < totalDur; t += beatInterval) {
+      paBeatTimes.push(Math.round(t * 1000) / 1000);
+    }
+  }
+
+  // Normalize external beat arrays and ensure we always start from beat 0.
+  paBeatTimes = paBeatTimes
+    .map(t => Number(t))
+    .filter(t => Number.isFinite(t) && t >= 0 && t < totalDur)
+    .sort((a, b) => a - b)
+    .filter((t, i, arr) => i === 0 || Math.abs(t - arr[i - 1]) > 1e-4);
+  if (!paBeatTimes.length || paBeatTimes[0] > Math.min(beatInterval * 0.5, 0.25)) {
+    paBeatTimes.unshift(0);
+  }
+
+  // Fix degenerate timestamps: if most segments have start=0 & end=0 (failed
+  // lyric alignment), distribute them evenly across the total duration so the
+  // time-based beat→segment mapping below actually works.
+  if (segs.length > 1 && totalDur > 0) {
+    const degenerateCount = segs.filter(s => s.start === 0 && s.end === 0).length;
+    if (degenerateCount >= segs.length - 1) {
+      const segDur = totalDur / segs.length;
+      segs.forEach((s, i) => {
+        s.start = Math.round(i * segDur * 1000) / 1000;
+        s.end = Math.round((i + 1) * segDur * 1000) / 1000;
+      });
+    }
+  }
+
+  // Map each beat to a chord from currentSegments
+  paBeatChords = [];
+  let lastChord = '';
+  let lastSegIdx = -1;
+  paBeatTimes.forEach((bt, bi) => {
+    // Use actual beat interval for this beat when using DB beat_times
+    const nextBt = paBeatTimes[bi + 1] || (bt + beatInterval);
+    // Find which segment this beat falls in — try beat start first, then midpoint
+    const segIdxByBt = segs.findIndex(s => s.start <= bt && s.end > bt);
+    const mid = bt + (nextBt - bt) / 2;
+    const segIdxByMid = segs.findIndex(s => s.start <= mid && s.end > mid);
+    const segIdx = segIdxByBt >= 0 ? segIdxByBt : segIdxByMid;
+    const fallbackIdx = bt < segs[0].start ? 0 : segs.length - 1;
+    const seg = segIdx >= 0 ? segs[segIdx] : segs[fallbackIdx];
+    const actualIdx = segIdx >= 0 ? segIdx : fallbackIdx;
+    const chord = _segmentChordForDisplay(seg) || 'N';
+    // Show chord on first beat of a new chord OR a new segment (even if same chord)
+    if (chord !== lastChord || actualIdx !== lastSegIdx) {
+      paBeatChords.push(chord);
+      lastChord = chord;
+      lastSegIdx = actualIdx;
+    } else {
+      paBeatChords.push('');  // continuation beat
+    }
+  });
+
+  // Force a visible onset label for each segment at the nearest beat on/after
+  // its start. This prevents the top playalong timeline from appearing blank
+  // when beat/segment boundaries are slightly misaligned.
+  for (let si = 0; si < segs.length; si++) {
+    const seg = segs[si];
+    const chord = _segmentChordForDisplay(seg);
+    if (!chord) continue;
+
+    let onsetBeat = paBeatTimes.findIndex(t => t >= seg.start - 1e-6);
+    if (onsetBeat < 0) onsetBeat = paBeatTimes.length - 1;
+    if (onsetBeat < 0) continue;
+
+    paBeatChords[onsetBeat] = chord;
+  }
+
+  paRenderBeatTimeline();
+}
+
+function paRenderBeatTimeline() {
+  const inner = document.getElementById('pa-timeline-inner');
+  // Keep playhead, remove everything else
+  const playhead = document.getElementById('pa-playhead');
+  inner.innerHTML = '';
+  inner.appendChild(playhead);
+
+  // Centering pads
+  const scroll = document.getElementById('pa-timeline-scroll');
+  const padCount = Math.ceil((scroll ? scroll.offsetWidth : 400) / 2 / 48);
+  for (let p = 0; p < padCount; p++) {
+    const pad = document.createElement('div');
+    pad.className = 'pa-beat-pad';
+    inner.appendChild(pad);
+  }
+
+  paBeatTimes.forEach((bt, bi) => {
+    const div = document.createElement('div');
+    div.className = 'pa-beat';
+    if (bi % 4 === 0) div.classList.add('pa-measure-start');
+    div.dataset.bi = bi;
+
+    // Beat number (every 4th)
+    if (bi % 4 === 0) {
+      const num = document.createElement('span');
+      num.className = 'pa-beat-num';
+      num.textContent = Math.floor(bi / 4) + 1;
+      div.appendChild(num);
+    }
+
+    // Chord name (only on first beat where chord changes)
+    if (paBeatChords[bi]) {
+      const name = document.createElement('span');
+      name.className = 'pa-beat-name';
+      name.textContent = paToDisplayChord(paBeatChords[bi]);
+      // Click chord name → edit
+      name.addEventListener('click', (e) => {
+        e.stopPropagation();
+        paEditBeat(bi, div);
+      });
+      div.appendChild(name);
+
+      // X delete button
+      const del = document.createElement('button');
+      del.className = 'pa-beat-del';
+      del.textContent = '\u00D7';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        paBeatChords[bi] = '';
+        paBeatsToSegments();
+        paUpdateBeatLabel(bi, div);
+        initPlayAlongGrid();
+        // Remove the X button itself
+        del.remove();
+      });
+      div.appendChild(del);
+    } else {
+      // Empty continuation beat – add invisible click zone for editing
+      const emptyZone = document.createElement('span');
+      emptyZone.className = 'pa-beat-name';
+      emptyZone.style.opacity = '0';
+      emptyZone.textContent = '\u00A0';
+      emptyZone.addEventListener('click', (e) => {
+        e.stopPropagation();
+        paEditBeat(bi, div);
+      });
+      div.appendChild(emptyZone);
+    }
+
+    // Click top part of block → seek to this beat (don't auto-play)
+    div.addEventListener('click', (e) => {
+      const player = document.getElementById('audio-player');
+      player.currentTime = bt;
+    });
+
+    inner.appendChild(div);
+  });
+
+  // Trailing pads
+  for (let p = 0; p < padCount; p++) {
+    const pad = document.createElement('div');
+    pad.className = 'pa-beat-pad';
+    inner.appendChild(pad);
+  }
+}
+
+function paCenterBeatInTimeline(beatIdx, behavior = 'auto') {
+  const scroll = document.getElementById('pa-timeline-scroll');
+  const beatEl = document.querySelector(`.pa-beat[data-bi="${beatIdx}"]`);
+  if (!scroll || !beatEl) return;
+  const targetLeft = beatEl.offsetLeft - (scroll.clientWidth - beatEl.offsetWidth) / 2;
+  const maxLeft = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+  scroll.scrollTo({ left: Math.max(0, Math.min(targetLeft, maxLeft)), behavior });
+}
+
+function paEditBeat(bi, beatDiv) {
+  // Don't allow double edit
+  if (beatDiv.querySelector('.pa-beat-edit')) return;
+
+  const currentChord = paBeatChords[bi] || paGetChordAtBeat(bi);
+  const input = document.createElement('input');
+  input.className = 'pa-beat-edit';
+  input.value = paToDisplayChord(paBeatChords[bi] || '');  // empty if continuation
+  input.placeholder = paToDisplayChord(paGetChordAtBeat(bi));
+  beatDiv.appendChild(input);
+  input.focus();
+  input.select();
+
+  const commit = () => {
+    const displayVal = input.value.trim();
+    const val = paToBaseChord(displayVal);
+    input.remove();
+
+    if (displayVal === '' && paBeatChords[bi]) {
+      paBeatChords[bi] = '';
+    } else if (val && val !== paGetChordAtBeat(bi)) {
+      paBeatChords[bi] = val;
+    } else if (val === paGetChordAtBeat(bi) && !paBeatChords[bi]) {
+      paBeatChords[bi] = val;
+    }
+    // Rebuild segments from beat chords
+    paBeatsToSegments();
+    // Update this beat's label in-place (no full re-render)
+    paUpdateBeatLabel(bi, beatDiv);
+    // Also refresh the chord line grid
+    initPlayAlongGrid();
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = paToDisplayChord(paBeatChords[bi] || ''); input.blur(); }
+    if (e.key === 'Delete' || (e.key === 'Backspace' && !input.value)) {
+      // Delete = clear chord from this beat
+      input.value = '';
+      input.blur();
+    }
+  });
+}
+
+function paGetChordAtBeat(bi) {
+  // Walk backwards to find the active chord at this beat
+  for (let i = bi; i >= 0; i--) {
+    if (paBeatChords[i]) return paBeatChords[i];
+  }
+  return '';
+}
+
+function paUpdateBeatLabel(bi, beatDiv) {
+  // Update this beat's chord label in-place without re-rendering the whole timeline
+  const oldName = beatDiv.querySelector('.pa-beat-name');
+  if (oldName) oldName.remove();
+
+  const chord = paBeatChords[bi];
+  const name = document.createElement('span');
+  name.className = 'pa-beat-name';
+  if (chord) {
+    name.textContent = paToDisplayChord(chord);
+  } else {
+    name.style.opacity = '0';
+    name.textContent = '\u00A0';
+  }
+  name.addEventListener('click', (e) => {
+    e.stopPropagation();
+    paEditBeat(bi, beatDiv);
+  });
+  beatDiv.appendChild(name);
+}
+
+function paBeatsToSegments() {
+  // Rebuild currentSegments from paBeatChords + paBeatTimes
+  const bpm = 60 / ((paBeatTimes[1] || 0.5) - paBeatTimes[0]);
+  const beatInterval = 60 / bpm;
+  const newSegs = [];
+  let currentChord = paBeatChords[0] || '';
+  let startBeat = 0;
+
+  for (let bi = 1; bi <= paBeatTimes.length; bi++) {
+    const chord = bi < paBeatTimes.length ? (paBeatChords[bi] || '') : '__END__';
+    if (chord && chord !== '') {
+      // New chord starts here → close previous segment
+      const start = paBeatTimes[startBeat];
+      const end = bi < paBeatTimes.length ? paBeatTimes[bi] : paBeatTimes[paBeatTimes.length - 1] + beatInterval;
+      newSegs.push({
+        start: Math.round(start * 1000) / 1000,
+        end: Math.round(end * 1000) / 1000,
+        chord: currentChord,
+        sheetChord: currentChord,
+        nBeats: bi - startBeat,
+      });
+      currentChord = chord === '__END__' ? currentChord : chord;
+      startBeat = bi;
+    }
+  }
+
+  currentSegments = newSegs;
+  paRedetectKeyFromSegments();
+}
+
+  const segments = currentSegments.map(s => ({
+    start: s.start,
+    end: s.end,
+    chord: s.sheetChord || s.chord || 'N',
+  }));
+// Keep full 4x4 block structure so spacing is preserved on paste.
+let _copiedSection = []; // [{ chord: string, nBeats: number|null }, ...] length 16
+let _copiedBeatPattern = []; // beat-level markers: chord on onset beat, '' on continuation beats
+
+function _serializeCopiedSection(section) {
+  // 4 lines × 4 blocks, tab-separated for robust clipboard roundtrip.
+  const lines = [];
+  for (let li = 0; li < 4; li++) {
+    const row = [];
+    for (let bi = 0; bi < PA_CHORDS_PER_LINE; bi++) {
+      const idx = li * PA_CHORDS_PER_LINE + bi;
+      const item = section[idx] || { chord: '', nBeats: null };
+      const beats = Number.isFinite(item.nBeats) ? item.nBeats : '';
+      row.push(`${item.chord || ''}::${beats}`);
+    }
+    lines.push(row.join('\t'));
+  }
+  return lines.join('\n');
+}
+
+function _deserializeCopiedSection(text) {
+  const out = [];
+  if (!text || typeof text !== 'string') return out;
+  const lines = text.replace(/\r/g, '').split('\n').slice(0, 4);
+  for (let li = 0; li < 4; li++) {
+    const cols = (lines[li] || '').split('\t').slice(0, PA_CHORDS_PER_LINE);
+    for (let bi = 0; bi < PA_CHORDS_PER_LINE; bi++) {
+      const raw = cols[bi] || '';
+      const sep = raw.lastIndexOf('::');
+      if (sep >= 0) {
+        const chord = raw.slice(0, sep);
+        const beatsStr = raw.slice(sep + 2);
+        const beats = Number.isFinite(Number(beatsStr)) && beatsStr !== '' ? Number(beatsStr) : null;
+        out.push({ chord, nBeats: beats });
+      } else {
+        out.push({ chord: raw, nBeats: null });
+      }
+    }
+  }
+  return out;
+}
+
+async function paCopySection(startLineIdx) {
+  // Copy 4 lines (16 blocks) anchored at active/playhead block when available.
+  let startSeg = startLineIdx * PA_CHORDS_PER_LINE;
+
+  // 1) Resolve directly from the timeline indicator/playhead time.
+  const player = document.getElementById('audio-player');
+  let anchorTime = player ? player.currentTime : 0;
+  if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
+    anchorTime = paBeatTimes[paCurrentBeatIdx];
+  }
+
+  let byTime = -1;
+  for (let i = 0; i < currentSegments.length; i++) {
+    if (anchorTime >= currentSegments[i].start && anchorTime < currentSegments[i].end) {
+      byTime = i;
+      break;
+    }
+  }
+  if (byTime === -1 && currentSegments.length && anchorTime >= currentSegments[currentSegments.length - 1].start) {
+    byTime = currentSegments.length - 1;
+  }
+
+  if (byTime >= 0) {
+    startSeg = byTime;
+  } else if (Number.isFinite(paCurrentIdx) && paCurrentIdx >= 0) {
+    // 2) Fallback: active segment tracked by update loop.
+    startSeg = paCurrentIdx;
+  } else {
+    // 3) Fallback: active block in line grid.
+    const activeBlock = document.querySelector('#pa-lines .pa-block.pa-block-active[data-idx]');
+    if (activeBlock) {
+      const idx = parseInt(activeBlock.dataset.idx, 10);
+      if (Number.isFinite(idx)) startSeg = idx;
+    }
+  }
+
+  startSeg = Math.max(0, Math.min(startSeg, Math.max(0, currentSegments.length - 1)));
+  _copiedSection = [];
+  _copiedBeatPattern = [];
+  for (let i = 0; i < 16; i++) {
+    const seg = currentSegments[startSeg + i];
+    const chord = seg ? (seg.sheetChord || seg.chord || '') : '';
+    const nBeats = seg && Number.isFinite(seg.nBeats) && seg.nBeats > 0 ? seg.nBeats : 1;
+    _copiedSection.push({ chord, nBeats });
+
+    // Build beat-level spacing pattern so 5-beat (or any) spacing survives paste.
+    if (chord) {
+      _copiedBeatPattern.push(chord);
+      for (let b = 1; b < nBeats; b++) _copiedBeatPattern.push('');
+    } else {
+      for (let b = 0; b < nBeats; b++) _copiedBeatPattern.push('');
+    }
+  }
+
+  // Also write to system clipboard so paste works across refreshes/tabs.
+  const payload = _serializeCopiedSection(_copiedSection);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(payload);
+    } catch (_) {
+      // Ignore clipboard permission errors; in-memory copy still works.
+    }
+  }
+
+  const btn = document.querySelector(`[data-copy-line="${startLineIdx}"]`);
+  if (btn) {
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 1200);
+  }
+}
+
+async function paPasteSection(startLineIdx) {
+  let section = _copiedSection;
+
+  // Prefer clipboard payload if available (useful across pages/reloads).
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    try {
+      const clip = await navigator.clipboard.readText();
+      const parsed = _deserializeCopiedSection(clip);
+      if (parsed.length === 16) section = parsed;
+    } catch (_) {
+      // Fall back to in-memory section.
+    }
+  }
+
+  if (!section || !section.length) return;
+
+  const startSeg = startLineIdx * PA_CHORDS_PER_LINE;
+
+  // Prefer beat-level paste to preserve exact spacing between chord onsets.
+  if (paBeatTimes && paBeatTimes.length && _copiedBeatPattern && _copiedBeatPattern.length) {
+    const startTime = currentSegments[startSeg]?.start;
+    if (Number.isFinite(startTime)) {
+      let startBeatIdx = 0;
+      for (let i = 0; i < paBeatTimes.length; i++) {
+        if (paBeatTimes[i] >= startTime - 1e-6) {
+          startBeatIdx = i;
+          break;
+        }
+      }
+
+      for (let j = 0; j < _copiedBeatPattern.length; j++) {
+        const bi = startBeatIdx + j;
+        if (bi >= paBeatChords.length) break;
+        paBeatChords[bi] = _copiedBeatPattern[j];
+      }
+
+      paBeatsToSegments();
+      initPlayAlongGrid();
+      paBuildBeatTimeline();
+      return;
+    }
+  }
+
+  for (let i = 0; i < section.length && (startSeg + i) < currentSegments.length; i++) {
+    const target = currentSegments[startSeg + i];
+    const item = section[i] || { chord: '', nBeats: null };
+    target.sheetChord = item.chord;
+    target.chord = item.chord;
+    if (Number.isFinite(item.nBeats) && item.nBeats > 0) {
+      target.nBeats = item.nBeats;
+    }
+  }
+
+  initPlayAlongGrid();
+  paBuildBeatTimeline();
+}
+
+function paRepeatLine(lineIdx) {
+  const line = paLines[lineIdx];
+  if (!line) return;
+
+  const repeatsRaw = window.prompt('Repeat this 4-column pattern how many additional times?', '1');
+  if (repeatsRaw === null) return;
+
+  const repeats = Math.max(1, parseInt(repeatsRaw, 10) || 0);
+  if (!repeats) return;
+
+  if (!paBeatTimes.length) {
+    paBuildBeatTimeline();
+  }
+
+  const lineStartTime = currentSegments[line.startIdx]?.start;
+  const nextLine = paLines[lineIdx + 1];
+  const lineEndTime = nextLine
+    ? currentSegments[nextLine.startIdx]?.start
+    : (currentSegments[currentSegments.length - 1]?.end || lineStartTime);
+
+  if (!Number.isFinite(lineStartTime) || !Number.isFinite(lineEndTime) || lineEndTime <= lineStartTime) {
+    return;
+  }
+
+  let startBeatIdx = paBeatTimes.findIndex(t => t >= lineStartTime - 1e-6);
+  if (startBeatIdx < 0) startBeatIdx = 0;
+
+  let endBeatIdx = paBeatTimes.findIndex(t => t >= lineEndTime - 1e-6);
+  if (endBeatIdx < 0) endBeatIdx = paBeatTimes.length;
+  if (endBeatIdx <= startBeatIdx) endBeatIdx = Math.min(paBeatTimes.length, startBeatIdx + 1);
+
+  const sourcePattern = paBeatChords.slice(startBeatIdx, endBeatIdx);
+  const patternLen = sourcePattern.length;
+  if (!patternLen) return;
+
+  for (let rep = 1; rep <= repeats; rep++) {
+    const targetStartBeat = startBeatIdx + rep * patternLen;
+    if (targetStartBeat >= paBeatChords.length) break;
+    for (let j = 0; j < patternLen && (targetStartBeat + j) < paBeatChords.length; j++) {
+      paBeatChords[targetStartBeat + j] = sourcePattern[j];
+    }
+  }
+
+  paBeatsToSegments();
+  initPlayAlongGrid();
+}
+
+function initPlayAlongGrid() {
+  // Re-render just the chord line grid (not the full initPlayAlong)
+  const segs = currentSegments;
+  paRenderChordBank();
+  paLines = [];
+  for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
+    paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
+  }
+  const linesEl = document.getElementById('pa-lines');
+  linesEl.innerHTML = '';
+  paLines.forEach((line, li) => {
+    const row = document.createElement('div');
+    row.className = 'pa-line';
+    row.dataset.line = li;
+    const numEl = document.createElement('div');
+    numEl.className = 'pa-line-num';
+    numEl.textContent = li + 1;
+    numEl.style.cursor = 'pointer';
+    numEl.onclick = () => paJumpToLine(li);
+    row.appendChild(numEl);
+    for (let si = line.startIdx; si <= line.endIdx; si++) {
+      const seg = segs[si];
+      const block = document.createElement('div');
+      block.className = 'pa-block';
+      block.dataset.idx = si;
+      block.onclick = () => paJumpTo(si);
+      const nameEl = document.createElement('div');
+      nameEl.className = 'pa-block-chord';
+      nameEl.contentEditable = 'true';
+      nameEl.textContent = paToDisplayChord((seg.sheetChord || seg.chord || '').trim() || '');
+      nameEl.setAttribute('placeholder', '–');
+      if (!nameEl.textContent) nameEl.style.opacity = '0.3';
+      nameEl.addEventListener('blur', function() {
+        const ncDisplay = this.textContent.trim();
+        const nc = paToBaseChord(ncDisplay);
+        if (currentSegments[si]) {
+          currentSegments[si].sheetChord = nc;
+          currentSegments[si].chord = nc;
+          this.style.opacity = ncDisplay ? '1' : '0.3';
+          // Rebuild beat chords from updated segments
+          paBuildBeatTimeline();
+        }
+      });
+      nameEl.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); this.blur(); }
+      });
+      nameEl.addEventListener('click', function(ev) { ev.stopPropagation(); });
+      block.appendChild(nameEl);
+      const timeEl = document.createElement('div');
+      timeEl.className = 'pa-block-time';
+      timeEl.textContent = formatTime(seg.start);
+      block.appendChild(timeEl);
+      if (currentAlignMode === 'lyric' && seg.word) {
+        const wordEl = document.createElement('div');
+        wordEl.className = 'pa-block-word';
+        wordEl.textContent = seg.word;
+        block.appendChild(wordEl);
+      }
+      row.appendChild(block);
+    }
+    const count = line.endIdx - line.startIdx + 1;
+    for (let p = count; p < PA_CHORDS_PER_LINE; p++) {
+      const pad = document.createElement('div');
+      pad.className = 'pa-block';
+      pad.style.opacity = '0.15';
+      pad.style.cursor = 'default';
+      row.appendChild(pad);
+    }
+    // Copy/Paste buttons for this line
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'pa-line-actions';
+    actionsEl.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-left:4px;font-size:0.7em;';
+    const repeatBtn = document.createElement('button');
+    repeatBtn.textContent = '↻ Repeat';
+    repeatBtn.title = 'Repeat this line using the actual chord spacing pattern';
+    repeatBtn.style.cssText = 'cursor:pointer;background:#333;color:#ccc;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:inherit;white-space:nowrap;';
+    repeatBtn.onclick = (e) => { e.stopPropagation(); paRepeatLine(li); };
+    actionsEl.appendChild(repeatBtn);
+    row.appendChild(actionsEl);
+    linesEl.appendChild(row);
+  });
+}
+
+function paZoomTimeline(dir) {
+  // Not needed for beat-block (fixed width), but keep button functional
+}
+
+function paUpdatePlayhead() {
+  const player = document.getElementById('audio-player');
+  const playhead = document.getElementById('pa-playhead');
+  if (!playhead || !player) return;
+  // Position playhead based on beat index interpolation
+  const t = player.currentTime;
+  let bi = 0;
+  for (let i = paBeatTimes.length - 1; i >= 0; i--) {
+    if (t >= paBeatTimes[i]) { bi = i; break; }
+  }
+  const scroll = document.getElementById('pa-timeline-scroll');
+  const padCount = Math.ceil((scroll ? scroll.offsetWidth : 400) / 2 / 48);
+  // Fractional beat position
+  const beatInterval = paBeatTimes.length > 1 ? paBeatTimes[1] - paBeatTimes[0] : 0.5;
+  const frac = (t - paBeatTimes[bi]) / beatInterval;
+  const x = (padCount + bi + frac) * 48;
+  playhead.style.left = x + 'px';
+}
+
+// ─── Key Editing ────────────────────────────────
+function paEditKey() {
+  // Key is intentionally fixed; use transpose controls instead.
+}
+
+// ─── Save & History ─────────────────────────────
+let paCurrentVideoId = null;
+
+async function paSaveAndVerify() {
+  paRedetectKeyFromSegments();
+
+  const segments = currentSegments.map(s => ({
+    start: s.start, end: s.end,
+    chord: s.sheetChord || s.chord || 'N',
+  }));
+  const blanks = segments.filter(s => !s.chord).length;
+  if (blanks > segments.length * 0.5) {
+    alert('Too many blank chords (' + blanks + '/' + segments.length + '). Fill in chords first.');
+    return;
+  }
+  const songName = document.getElementById('song-name')?.value?.trim()
+    || document.querySelector('#info-bar strong')?.textContent
+    || 'unknown';
+  const videoId = _currentIngestVideoId || paCurrentVideoId;
+  if (!videoId || videoId.length !== 11) {
+    alert('A valid YouTube video ID is required. Use YouTube mode or set a video ID.');
+    return;
+  }
+  const bpm = parseFloat(document.getElementById('pa-bpm-badge')?.textContent?.replace('BPM: ', '')) || 120;
+  const badge = document.getElementById('pa-save-badge');
+  try {
+    const resp = await fetch(API + '/api/ingest/' + currentJobId + '/promote-verified', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        segments, songName, videoId,
+        key: paBaseKey || paCurrentKey, bpm,
+        beatTimes: paBeatTimes,
+      }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.saved) {
+      paCurrentVideoId = data.videoId;
+      badge.textContent = '✅ Saved & Verified!';
+      badge.style.background = '#1a8c1a';
+      setTimeout(() => { badge.textContent = '💾 Save & Verify'; badge.style.background = '#2a6e2a'; }, 3000);
+      paLoadHistory();
+    } else {
+      alert('Save failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Save error: ' + e.message);
+  }
+}
+
+function paToggleHistory() {
+  const dropdown = document.getElementById('pa-versions-dropdown');
+  const isOpen = dropdown.classList.contains('open');
+  dropdown.classList.toggle('open');
+  if (!isOpen) paLoadHistory();
+}
+
+async function paLoadHistory() {
+  if (!currentJobId && !paCurrentVideoId) return;
+  const dropdown = document.getElementById('pa-versions-dropdown');
+  dropdown.innerHTML = '<div class="pa-version-item" style="color:#666">Loading…</div>';
+
+  try {
+    const url = paCurrentVideoId
+      ? API + '/api/versions/' + paCurrentVideoId
+      : API + '/api/ingest/' + currentJobId + '/versions';
+    const resp = await fetch(url);
+    const data = await resp.json();
+    const versions = data.versions || [];
+
+    if (!versions.length) {
+      dropdown.innerHTML = '<div class="pa-version-item" style="color:#666">No saved versions yet</div>';
+      return;
+    }
+
+    dropdown.innerHTML = '';
+    versions.forEach(v => {
+      const item = document.createElement('div');
+      item.className = 'pa-version-item';
+      const date = new Date(v.analyzedAt * 1000);
+      const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+      const label = v.source === 'verified' ? '✓ Verified' : `v${v.versionId}`;
+      item.innerHTML = `<span>${label} · ${v.key} · ${v.segmentCount} segs</span><span class="v-date">${dateStr}</span>`;
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        paLoadVersion(v.versionId);
+        dropdown.classList.remove('open');
+      });
+      dropdown.appendChild(item);
+    });
+  } catch (e) {
+    dropdown.innerHTML = '<div class="pa-version-item" style="color:#f66">Error loading versions</div>';
+  }
+}
+
+async function paLoadVersion(versionId) {
+  try {
+    const resp = await fetch(API + '/api/version/' + versionId);
+    const data = await resp.json();
+    if (!resp.ok) { alert(data.error || 'Load failed'); return; }
+
+    // Update segments — drop N segments
+    currentSegments = data.chords || [];
+    paBaseKey = data.key || '?';
+    paCurrentKey = paBaseKey;
+    paTransposeSemitones = 0;
+    paRenderKeyBadge();
+    paRenderTransposeLabel();
+    document.getElementById('pa-bpm-badge').textContent = `BPM: ${data.bpm}`;
+
+    // Rebuild beat timeline from segments
+    paBuildBeatTimeline();
+    initPlayAlongGrid();
+
+    // Keep audio playable when history changes only chord metadata.
+    const player = document.getElementById('audio-player');
+    if ((!player.src || player.src === window.location.href) && paAudioSrc) {
+      player.src = paAudioSrc;
+      player.load();
+    }
+
+    const badge = document.querySelector('.pa-badge-save');
+    badge.textContent = `📋 Loaded v${versionId}`;
+    setTimeout(() => { badge.textContent = '💾 Save'; }, 2000);
+  } catch (e) {
+    alert('Load error: ' + e.message);
+  }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const dropdown = document.getElementById('pa-versions-dropdown');
+  const badge = document.getElementById('pa-history-badge');
+  if (dropdown && badge && !badge.contains(e.target)) {
+    dropdown.classList.remove('open');
+  }
+});
+
+// Global keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  // Ignore when typing in an input/editable element
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
+  if (e.key === ' ') {
+    e.preventDefault();
+    paTogglePlay();
+  }
+});
+</script>
+</body>
+</html>

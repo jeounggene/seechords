@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeeChords Privacy Policy</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 720px;
+      margin: 40px auto;
+      padding: 0 20px;
+      line-height: 1.6;
+      color: #222;
+    }
+    h1 { font-size: 1.6rem; margin-bottom: 0.3em; }
+    h2 { font-size: 1.2rem; margin-top: 1.5em; }
+    p, ul { margin: 0.5em 0; }
+    ul { padding-left: 1.5em; }
+    .updated { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>SeeChords — Privacy Policy</h1>
+  <p class="updated">Last updated: March 26, 2026</p>
+
+  <h2>Overview</h2>
+  <p>SeeChords is a browser extension that displays guitar chord diagrams synchronized to YouTube videos. We are committed to protecting your privacy. This policy explains what data the extension accesses and how it is handled.</p>
+
+  <h2>Data Collection</h2>
+  <p>SeeChords does <strong>not</strong> collect, store, or share any personal information. Specifically:</p>
+  <ul>
+    <li>We do not collect names, email addresses, or any personal identifiers.</li>
+    <li>We do not use cookies or tracking technologies.</li>
+    <li>We do not sell or share any data with third parties.</li>
+  </ul>
+
+  <h2>Data the Extension Accesses</h2>
+  <p>The extension accesses only the minimum data necessary to function:</p>
+  <ul>
+    <li><strong>YouTube video ID:</strong> When you visit a YouTube video page, the extension reads the video ID from the page URL to look up chord data from the SeeChords server.</li>
+    <li><strong>YouTube audio stream URLs:</strong> The extension observes network requests to googlevideo.com to identify audio stream URLs. These URLs are used solely for optional audio analysis (chord detection) and are never stored or transmitted to any party other than the SeeChords backend.</li>
+    <li><strong>Page content (YouTube only):</strong> The extension injects a chord overlay UI into YouTube video pages. It accesses the video player element to synchronize chord display with playback time.</li>
+  </ul>
+
+  <h2>Server Communication</h2>
+  <p>The extension communicates with the SeeChords backend server (<code>seechords.fly.dev</code>) for the following purposes:</p>
+  <ul>
+    <li>Fetching pre-analyzed chord data for a given video ID.</li>
+    <li>Submitting audio for chord analysis when the user explicitly requests it.</li>
+  </ul>
+  <p>The server does not receive or store any personal information. Audio files submitted for analysis are processed in real time and <strong>immediately deleted</strong> upon completion. No copyrighted audio content is stored, cached, or redistributed. Only non-copyrightable derived data (chord names and beat timestamps) is retained.</p>
+
+  <h2>Permissions Used</h2>
+  <ul>
+    <li><strong>activeTab:</strong> Used to identify the current YouTube video and display the chord overlay.</li>
+    <li><strong>scripting:</strong> Used to inject a small script into the YouTube page to read the audio stream URL from the player’s existing data, enabling user-initiated chord analysis. No audio is stored by the extension.</li>
+    <li><strong>webRequest:</strong> Used to passively observe audio stream requests to googlevideo.com for optional audio extraction. No requests are modified or blocked.</li>
+    <li><strong>Host permissions (youtube.com, googlevideo.com, seechords.fly.dev):</strong> Required to interact with YouTube pages, observe audio streams, and communicate with the SeeChords API.</li>
+  </ul>
+
+  <h2>Copyright</h2>
+  <p>SeeChords does not store, cache, or redistribute any copyrighted audio or video content. Audio is used transiently for chord analysis and immediately deleted. Only derived, non-copyrightable data (chord names and timing information) is stored.</p>
+
+  <h2>Remote Code</h2>
+  <p>SeeChords does not load or execute any remote code. All extension code is bundled within the extension package. The extension communicates with the SeeChords API server only to send and receive JSON data.</p>
+
+  <h2>Changes to This Policy</h2>
+  <p>If we make changes to this privacy policy, we will update the "Last updated" date above. Continued use of the extension after changes constitutes acceptance of the updated policy.</p>
+
+  <h2>Contact</h2>
+  <p>If you have questions about this privacy policy, please open an issue on the project's GitHub repository or contact the developer.</p>
+</body>
+</html>

@@ -1,0 +1,104 @@
+Device: mps
+
+1. Loading data from data/features_v2.npz...
+   52729 beats from 179 songs
+   Feature dim: 60
+
+2. Splitting data...
+   Train: 127 songs, 36320 beats
+   Val:   26 songs, 8686 beats
+   Test:  26 songs, 7723 beats
+
+3. Building datasets...
+   Train windows: 6048 (12x augmented)
+   Val songs: 26, Test songs: 26
+
+4. Quality3 class weights: N=1.00, maj=1.00, min=4.00
+
+5. Building model (Transformer + CRF)...
+/Users/genej/projects/chords/seechords/training/v2/transformer_model.py:166: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+   Total parameters: 411,212 (CRF: 675)
+   Emission temperature: 5.0
+   CRF init: self_trans=2.00, off_trans=0.000
+   Frozen encoder warmup: 10 epochs (frozen=38, trainable=9)
+   After warmup: encoder LR=5.0e-05
+
+6. Training (150 epochs max, patience=40)...
+   CRF weight: 1.0, aux weight: 0.25
+  Epoch   1 | loss=242.5372 (crf=241.2422 aux=5.1800) | lr=0.0e+00/crf=1.0e-04 | 12.9s
+           | val WCSR=0.030  maj=0.037  min=0.000  root=0.048  flip=0.002
+           | Am→A: 0/398  Dm→D: 0/68  Cm→C: 0/12
+  Epoch   5 | loss=224.0825 (crf=222.7875 aux=5.1800) | lr=0.0e+00/crf=1.0e-04 | 12.1s
+           | val WCSR=0.048  maj=0.060  min=0.000  root=0.063  flip=0.002
+           | Am→A: 0/398  Dm→D: 0/68  Cm→C: 0/12
+  Epoch  10 | loss=204.0038 (crf=202.7082 aux=5.1823) | lr=0.0e+00/crf=1.0e-04 | 12.8s
+           | val WCSR=0.046  maj=0.057  min=0.000  root=0.064  flip=0.003
+           | Am→A: 0/398  Dm→D: 0/68  Cm→C: 0/12
+  >>> Encoder unfrozen at epoch 11, encoder LR=5.0e-05
+  Epoch  15 | loss=127.4458 (crf=126.6143 aux=3.3259) | lr=5.0e-05/crf=1.0e-04 | 14.2s
+           | val WCSR=0.241  maj=0.285  min=0.061  root=0.287  flip=0.022
+           | Am→A: 262/398  Dm→D: 6/68  Cm→C: 0/12
+  Epoch  20 | loss=103.3602 (crf=102.6312 aux=2.9160) | lr=5.0e-05/crf=1.0e-04 | 14.9s
+           | val WCSR=0.301  maj=0.324  min=0.211  root=0.349  flip=0.064
+           | Am→A: 180/398  Dm→D: 13/68  Cm→C: 0/12
+  Epoch  25 | loss=93.8142 (crf=93.1311 aux=2.7327) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.297  maj=0.322  min=0.201  root=0.372  flip=0.082
+           | Am→A: 195/398  Dm→D: 11/68  Cm→C: 0/12
+  Epoch  30 | loss=87.3344 (crf=86.6786 aux=2.6231) | lr=5.0e-05/crf=1.0e-04 | 14.9s
+           | val WCSR=0.323  maj=0.351  min=0.214  root=0.413  flip=0.093
+           | Am→A: 200/398  Dm→D: 8/68  Cm→C: 0/12
+  Epoch  35 | loss=82.6343 (crf=81.9972 aux=2.5484) | lr=5.0e-05/crf=1.0e-04 | 14.4s
+           | val WCSR=0.344  maj=0.369  min=0.247  root=0.443  flip=0.103
+           | Am→A: 250/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  40 | loss=79.4196 (crf=78.7970 aux=2.4904) | lr=5.0e-05/crf=1.0e-04 | 15.2s
+           | val WCSR=0.371  maj=0.386  min=0.318  root=0.476  flip=0.106
+           | Am→A: 234/398  Dm→D: 4/68  Cm→C: 0/12
+  Epoch  45 | loss=76.8829 (crf=76.2723 aux=2.4423) | lr=5.0e-05/crf=1.0e-04 | 15.5s
+           | val WCSR=0.378  maj=0.397  min=0.305  root=0.486  flip=0.103
+           | Am→A: 270/398  Dm→D: 7/68  Cm→C: 0/12
+  Epoch  50 | loss=74.9652 (crf=74.3639 aux=2.4050) | lr=5.0e-05/crf=1.0e-04 | 14.5s
+           | val WCSR=0.407  maj=0.423  min=0.341  root=0.504  flip=0.107
+           | Am→A: 303/398  Dm→D: 9/68  Cm→C: 0/12
+  Epoch  55 | loss=73.2919 (crf=72.6979 aux=2.3762) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.476  maj=0.517  min=0.309  root=0.541  flip=0.109
+           | Am→A: 309/398  Dm→D: 8/68  Cm→C: 0/12
+  Epoch  60 | loss=71.8997 (crf=71.3124 aux=2.3490) | lr=5.0e-05/crf=1.0e-04 | 14.5s
+           | val WCSR=0.491  maj=0.530  min=0.332  root=0.555  flip=0.117
+           | Am→A: 261/398  Dm→D: 8/68  Cm→C: 0/12
+  Epoch  65 | loss=70.7139 (crf=70.1326 aux=2.3252) | lr=5.0e-05/crf=1.0e-04 | 14.5s
+           | val WCSR=0.523  maj=0.567  min=0.349  root=0.586  flip=0.123
+           | Am→A: 308/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  70 | loss=69.5197 (crf=68.9430 aux=2.3068) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.522  maj=0.565  min=0.352  root=0.587  flip=0.128
+           | Am→A: 318/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  75 | loss=68.4522 (crf=67.8792 aux=2.2921) | lr=5.0e-05/crf=1.0e-04 | 14.6s
+           | val WCSR=0.551  maj=0.608  min=0.322  root=0.611  flip=0.134
+           | Am→A: 291/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  80 | loss=67.5424 (crf=66.9733 aux=2.2765) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.546  maj=0.598  min=0.340  root=0.607  flip=0.137
+           | Am→A: 286/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  85 | loss=66.7487 (crf=66.1828 aux=2.2633) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.554  maj=0.606  min=0.349  root=0.619  flip=0.142
+           | Am→A: 290/398  Dm→D: 11/68  Cm→C: 0/12
+  Epoch  90 | loss=65.8915 (crf=65.3287 aux=2.2512) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.564  maj=0.615  min=0.361  root=0.623  flip=0.142
+           | Am→A: 289/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch  95 | loss=65.1963 (crf=64.6350 aux=2.2452) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.575  maj=0.631  min=0.350  root=0.631  flip=0.143
+           | Am→A: 267/398  Dm→D: 7/68  Cm→C: 0/12
+  Epoch 100 | loss=64.4898 (crf=63.9302 aux=2.2383) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.565  maj=0.618  min=0.351  root=0.627  flip=0.147
+           | Am→A: 293/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch 105 | loss=63.8738 (crf=63.3164 aux=2.2294) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.576  maj=0.632  min=0.349  root=0.631  flip=0.150
+           | Am→A: 279/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch 110 | loss=63.2797 (crf=62.7243 aux=2.2214) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.574  maj=0.629  min=0.353  root=0.628  flip=0.151
+           | Am→A: 263/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch 115 | loss=62.7346 (crf=62.1811 aux=2.2140) | lr=5.0e-05/crf=1.0e-04 | 14.2s
+           | val WCSR=0.575  maj=0.626  min=0.369  root=0.631  flip=0.155
+           | Am→A: 268/398  Dm→D: 10/68  Cm→C: 0/12
+  Epoch 120 | loss=62.2144 (crf=61.6627 aux=2.2070) | lr=5.0e-05/crf=1.0e-04 | 14.3s
+           | val WCSR=0.576  maj=0.629  min=0.367  root=0.632  flip=0.155
+           | Am→A: 251/398  Dm→D: 10/68  Cm→C: 0/12

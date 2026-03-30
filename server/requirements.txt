@@ -1,0 +1,9 @@
+flask>=2.0.0
+flask-cors>=4.0.0
+gunicorn>=21.0.0
+librosa>=0.10.0
+numpy>=1.21.0
+scipy>=1.7.0
+pdfplumber>=0.10.0
+essentia-tensorflow
+yt-dlp

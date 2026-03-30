@@ -1,0 +1,31 @@
+{
+  "datasets": {
+    "beatles": {
+      "type": "isophonics",
+      "annotations": "data/beatles/annotations",
+      "audio_dir": "data/beatles/audio",
+      "weight": 1.0
+    },
+    "queen": {
+      "type": "isophonics",
+      "annotations": "data/queen/annotations",
+      "audio_dir": "data/queen/audio",
+      "weight": 1.0
+    },
+    "verified": {
+      "type": "flat",
+      "audio_dir": "data/verified/audio",
+      "labels_dir": "data/verified/labels",
+      "weight": 1.0
+    },
+    "billboard": {
+      "type": "flat",
+      "audio_dir": "data/billboard/audio",
+      "labels_dir": "data/billboard/labels",
+      "subset_file": "data/billboard/training_subset.json",
+      "tier_file": "data/billboard/silver_tiers.json",
+      "max_beats": "gold",
+      "weight": 0.8
+    }
+  }
+}

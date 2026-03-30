@@ -1,0 +1,10 @@
+{
+  "description": "Songs permanently excluded from training due to catastrophic data issues",
+  "reject": {
+    "0326": "Zero accuracy on test — likely wrong audio or completely broken labels",
+    "0071": "5% accuracy — likely wrong audio version or severe label mismatch"
+  },
+  "exclude_from_beat_training": {
+    "Greatest Hits I/16 We Will Rock You": "Unusual stomp-clap pulse defeats standard beat detection"
+  }
+}

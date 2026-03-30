@@ -1,0 +1,162 @@
+[
+  {
+    "id": "0049",
+    "name": "James Brown - Get Up (I Feel Like Being Like A) Sex Machine (Part 1)",
+    "reason": "unusable mismatch: audio=649s label=221s diff=+428s (194%)"
+  },
+  {
+    "id": "0077",
+    "name": "Johnny Tillotson - Jimmy's Girl",
+    "reason": "questionable mismatch: audio=165s label=212s diff=-47s (22%)"
+  },
+  {
+    "id": "0091",
+    "name": "Ray Price - For The Good Times",
+    "reason": "questionable mismatch: audio=228s label=343s diff=-115s (34%)"
+  },
+  {
+    "id": "0102",
+    "name": "Squeeze - Keep Bright Dreams",
+    "reason": "no YouTube URL found"
+  },
+  {
+    "id": "0199",
+    "name": "Solomon Burke - If You Need Me",
+    "reason": "unusable mismatch: audio=155s label=303s diff=-149s (49%)"
+  },
+  {
+    "id": "0242",
+    "name": "Elvis Presley - There Goes My Everything",
+    "reason": "questionable mismatch: audio=190s label=262s diff=-72s (28%)"
+  },
+  {
+    "id": "0258",
+    "name": "Firehouse - Don't Treat Me Bad",
+    "reason": "questionable mismatch: audio=236s label=323s diff=-87s (27%)"
+  },
+  {
+    "id": "0265",
+    "name": "The 5th Dimension - Go Where You Wanna Go",
+    "reason": "questionable mismatch: audio=138s label=192s diff=-54s (28%)"
+  },
+  {
+    "id": "0293",
+    "name": "Chicago - Does Anybody Really Know What Time It Is?",
+    "reason": "questionable mismatch: audio=168s label=261s diff=-93s (36%)"
+  },
+  {
+    "id": "0317",
+    "name": "Daryl Hall & John Oates - Rich Girl",
+    "reason": "questionable mismatch: audio=144s label=231s diff=-87s (38%)"
+  },
+  {
+    "id": "0339",
+    "name": "Elvis Presley - Ask Me",
+    "reason": "unusable mismatch: audio=127s label=274s diff=-147s (54%)"
+  },
+  {
+    "id": "0348",
+    "name": "Four Tops - Standing In The Shadows Of Love",
+    "reason": "unusable mismatch: audio=156s label=329s diff=-173s (53%)"
+  },
+  {
+    "id": "0349",
+    "name": "Tina Turner - The Best",
+    "reason": "questionable mismatch: audio=249s label=323s diff=-73s (23%)"
+  },
+  {
+    "id": "0352",
+    "name": "The Rolling Stones - Doo Doo Doo Doo Doo (Heartbreaker)",
+    "reason": "questionable mismatch: audio=206s label=270s diff=-63s (23%)"
+  },
+  {
+    "id": "0370",
+    "name": "Brenda Lee - Losing You",
+    "reason": "questionable mismatch: audio=150s label=237s diff=-88s (37%)"
+  },
+  {
+    "id": "0407",
+    "name": "Aretha Franklin - I Never Loved A Man (The Way I Love You)",
+    "reason": "questionable mismatch: audio=172s label=280s diff=-109s (39%)"
+  },
+  {
+    "id": "0500",
+    "name": "Gladys Knight & The Pips - I'm Coming Out",
+    "reason": "no YouTube URL found"
+  },
+  {
+    "id": "0528",
+    "name": "Tommy James - Mony Mony",
+    "reason": "questionable mismatch: audio=171s label=245s diff=-74s (30%)"
+  },
+  {
+    "id": "0578",
+    "name": "Canned Heat - Let's Work Together",
+    "reason": "questionable mismatch: audio=194s label=260s diff=-67s (26%)"
+  },
+  {
+    "id": "0627",
+    "name": "Wilson Pickett - I'm In Love",
+    "reason": "questionable mismatch: audio=149s label=233s diff=-84s (36%)"
+  },
+  {
+    "id": "0633",
+    "name": "Elvis Presley - If You Really Love Me",
+    "reason": "questionable mismatch: audio=180s label=274s diff=-94s (34%)"
+  },
+  {
+    "id": "0637",
+    "name": "James Brown - Think",
+    "reason": "questionable mismatch: audio=169s label=246s diff=-77s (31%)"
+  },
+  {
+    "id": "0691",
+    "name": "Aaron Neville - Tell It Like It Is",
+    "reason": "questionable mismatch: audio=166s label=267s diff=-101s (38%)"
+  },
+  {
+    "id": "0735",
+    "name": "Heart - Getaway",
+    "reason": "no YouTube URL found"
+  },
+  {
+    "id": "0775",
+    "name": "The Kendalls - Heaven's Just A Sin Away",
+    "reason": "unusable mismatch: audio=146s label=256s diff=-109s (43%)"
+  },
+  {
+    "id": "0811",
+    "name": "Jermaine Jackson - Let's Get Serious",
+    "reason": "unusable mismatch: audio=477s label=216s diff=+261s (121%)"
+  },
+  {
+    "id": "0884",
+    "name": "Ann Peebles - I Can't Stand The Rain",
+    "reason": "unusable mismatch: audio=150s label=444s diff=-294s (66%)"
+  },
+  {
+    "id": "0925",
+    "name": "The Ritchie Family - The Best Disco In Town",
+    "reason": "unusable mismatch: audio=401s label=194s diff=+207s (107%)"
+  },
+  {
+    "id": "1027",
+    "name": "Greg Kihn - Lucky",
+    "reason": "questionable mismatch: audio=209s label=267s diff=-58s (22%)"
+  },
+  {
+    "id": "1149",
+    "name": "Count Basie - Going To Chicago Blues",
+    "reason": "questionable mismatch: audio=201s label=254s diff=-53s (21%)"
+  },
+  {
+    "id": "1256",
+    "name": "Genesis - Abacab",
+    "reason": "no album-length version found"
+  },
+  {
+    "id": "1276",
+    "name": "Milli Vanilli - Baby Don't Forget My Number",
+    "reason": "questionable mismatch: audio=267s label=388s diff=-121s (31%)"
+  }
+]

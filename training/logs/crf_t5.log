@@ -1,0 +1,126 @@
+Device: mps
+
+1. Loading data from data/features_v2.npz...
+   52729 beats from 179 songs
+   Feature dim: 60
+
+2. Splitting data...
+   Train: 127 songs, 36320 beats
+   Val:   26 songs, 8686 beats
+   Test:  26 songs, 7723 beats
+
+3. Building datasets...
+   Train windows: 6048 (12x augmented)
+   Val songs: 26, Test songs: 26
+
+4. Quality3 class weights: N=1.00, maj=1.00, min=4.00
+
+5. Building model (Transformer + CRF)...
+/Users/genej/projects/chords/seechords/training/v2/transformer_model.py:166: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+   Total parameters: 411,212 (CRF: 675)
+   Emission temperature: 5.0
+   CRF init: self_trans=2.00, off_trans=0.003
+
+6. Training (150 epochs max, patience=40)...
+   CRF weight: 1.0, aux weight: 0.3
+  Epoch   1 | loss=198.2474 (crf=197.0421 aux=4.0174) | lr=1.0e-04 | 15.1s
+           | val WCSR=0.171  maj=0.211  min=0.000  root=0.195  flip=0.002
+           | Am→A: 105/398  Dm→D: 22/68  Cm→C: 0/12
+  Epoch   5 | loss=122.3677 (crf=121.4521 aux=3.0519) | lr=1.0e-04 | 15.0s
+           | val WCSR=0.297  maj=0.338  min=0.134  root=0.350  flip=0.044
+           | Am→A: 203/398  Dm→D: 15/68  Cm→C: 0/12
+  Epoch  10 | loss=97.3202 (crf=96.5232 aux=2.6567) | lr=1.0e-04 | 15.0s
+           | val WCSR=0.456  maj=0.488  min=0.336  root=0.496  flip=0.099
+           | Am→A: 151/398  Dm→D: 9/68  Cm→C: 0/12
+  Epoch  15 | loss=87.2444 (crf=86.4970 aux=2.4915) | lr=1.0e-04 | 14.7s
+           | val WCSR=0.512  maj=0.531  min=0.449  root=0.563  flip=0.124
+           | Am→A: 160/398  Dm→D: 0/68  Cm→C: 6/12
+  Epoch  20 | loss=81.4039 (crf=80.6864 aux=2.3919) | lr=1.0e-04 | 14.7s
+           | val WCSR=0.510  maj=0.550  min=0.353  root=0.572  flip=0.119
+           | Am→A: 178/398  Dm→D: 0/68  Cm→C: 12/12
+  Epoch  25 | loss=77.5759 (crf=76.8771 aux=2.3291) | lr=1.0e-04 | 14.7s
+           | val WCSR=0.540  maj=0.590  min=0.339  root=0.592  flip=0.123
+           | Am→A: 204/398  Dm→D: 1/68  Cm→C: 12/12
+  Epoch  30 | loss=74.5214 (crf=73.8353 aux=2.2870) | lr=1.0e-04 | 15.0s
+           | val WCSR=0.531  maj=0.586  min=0.305  root=0.582  flip=0.121
+           | Am→A: 166/398  Dm→D: 1/68  Cm→C: 6/12
+  Epoch  35 | loss=71.9843 (crf=71.3074 aux=2.2566) | lr=1.0e-04 | 15.0s
+           | val WCSR=0.532  maj=0.591  min=0.285  root=0.578  flip=0.125
+           | Am→A: 163/398  Dm→D: 1/68  Cm→C: 6/12
+  Epoch  40 | loss=69.9095 (crf=69.2402 aux=2.2308) | lr=1.0e-04 | 15.4s
+           | val WCSR=0.558  maj=0.623  min=0.283  root=0.601  flip=0.127
+           | Am→A: 189/398  Dm→D: 0/68  Cm→C: 0/12
+  Epoch  45 | loss=68.0596 (crf=67.3968 aux=2.2093) | lr=1.0e-04 | 15.3s
+           | val WCSR=0.547  maj=0.616  min=0.249  root=0.592  flip=0.127
+           | Am→A: 192/398  Dm→D: 1/68  Cm→C: 0/12
+  Epoch  50 | loss=66.6927 (crf=66.0345 aux=2.1940) | lr=1.0e-04 | 15.0s
+           | val WCSR=0.557  maj=0.622  min=0.285  root=0.606  flip=0.133
+           | Am→A: 199/398  Dm→D: 4/68  Cm→C: 0/12
+  Epoch  55 | loss=65.3517 (crf=64.6983 aux=2.1781) | lr=1.0e-04 | 14.9s
+           | val WCSR=0.555  maj=0.618  min=0.300  root=0.607  flip=0.136
+           | Am→A: 234/398  Dm→D: 3/68  Cm→C: 0/12
+  Epoch  60 | loss=64.0825 (crf=63.4342 aux=2.1610) | lr=1.0e-04 | 15.2s
+           | val WCSR=0.543  maj=0.607  min=0.266  root=0.592  flip=0.138
+           | Am→A: 181/398  Dm→D: 3/68  Cm→C: 0/12
+  Epoch  65 | loss=63.1590 (crf=62.5136 aux=2.1512) | lr=1.0e-04 | 14.7s
+           | val WCSR=0.544  maj=0.604  min=0.290  root=0.597  flip=0.137
+           | Am→A: 234/398  Dm→D: 3/68  Cm→C: 0/12
+  Epoch  70 | loss=62.1462 (crf=61.5049 aux=2.1376) | lr=1.0e-04 | 14.7s
+           | val WCSR=0.517  maj=0.571  min=0.287  root=0.562  flip=0.136
+           | Am→A: 152/398  Dm→D: 3/68  Cm→C: 0/12
+  Epoch  75 | loss=61.1894 (crf=60.5510 aux=2.1281) | lr=1.0e-04 | 15.3s
+           | val WCSR=0.497  maj=0.557  min=0.237  root=0.545  flip=0.132
+           | Am→A: 159/398  Dm→D: 3/68  Cm→C: 0/12
+  Epoch  80 | loss=60.4188 (crf=59.7842 aux=2.1151) | lr=1.0e-04 | 15.3s
+           | val WCSR=0.485  maj=0.536  min=0.253  root=0.531  flip=0.130
+           | Am→A: 172/398  Dm→D: 3/68  Cm→C: 0/12
+
+  Early stopping at epoch 80 (best val WCSR=0.5577 at epoch 40)
+
+   Learned CRF: self_trans=2.41, off_trans=-0.468
+
+7. Final evaluation on test set (model from epoch 40)...
+
+============================================================
+Test Results (Transformer + CRF decode)
+------------------------------------------------------------
+  WCSR:       0.610
+  Major:      0.694
+  Minor:      0.344
+  Root:       0.666
+  Flip rate:  0.151
+------------------------------------------------------------
+  Am→A: 151/280  Dm→D: 31/463  Cm→C: 0/0
+============================================================
+
+Per-song breakdown (sorted by accuracy):
+  [G] 11_-_Abbey_Road/06_-_I_Want_You                          992 beats  acc=0.326  flip=0.086
+  [G] 11_-_Abbey_Road/16_-_The_End                             259 beats  acc=0.378  flip=0.140
+  [G] 06_-_Rubber_Soul/10_-_I'm_Looking_Through_You            203 beats  acc=0.448  flip=0.223
+  [G] 06_-_Rubber_Soul/14_-_Run_For_Your_Life                  201 beats  acc=0.483  flip=0.065
+  [G] 04_-_Beatles_for_Sale/02_-_I'm_a_Loser                   219 beats  acc=0.484  flip=0.106
+  [G] 02_-_With_the_Beatles/02_-_All_I've_Got_To_Do            237 beats  acc=0.536  flip=0.097
+  [G] 10CD1_-_The_Beatles/CD1_-_02_-_Dear_Prudence             295 beats  acc=0.549  flip=0.034
+  [G] 09_-_Magical_Mystery_Tour/02_-_The_Fool_On_The_Hill      213 beats  acc=0.577  flip=0.193
+  [G] 02_-_With_the_Beatles/03_-_All_My_Loving                 317 beats  acc=0.587  flip=0.095
+  [G] 09_-_Magical_Mystery_Tour/10_-_Baby_You're_A_Rich_Man    285 beats  acc=0.600  flip=0.067
+  [G] 04_-_Beatles_for_Sale/05_-_I'll_Follow_the_Sun           231 beats  acc=0.606  flip=0.226
+  [G] 05_-_Help!/13_-_Yesterday                                191 beats  acc=0.639  flip=0.232
+  [G] 03_-_A_Hard_Day's_Night/03_-_If_I_Fell                   241 beats  acc=0.639  flip=0.258
+  [G] 02_-_With_the_Beatles/06_-_Till_There_Was_You            263 beats  acc=0.654  flip=0.279
+  [G] 11_-_Abbey_Road/03_-_Maxwell's_Silver_Hammer             447 beats  acc=0.660  flip=0.139
+  [G] 05_-_Help!/11_-_Tell_Me_What_You_See                     345 beats  acc=0.678  flip=0.163
+  [G] 09_-_Magical_Mystery_Tour/09_-_Penny_Lane                321 beats  acc=0.682  flip=0.153
+  [G] 05_-_Help!/14_-_Dizzy_Miss_Lizzy                         381 beats  acc=0.693  flip=0.045
+  [G] 06_-_Rubber_Soul/08_-_What_Goes_On                       260 beats  acc=0.712  flip=0.120
+  [G] 01_-_Please_Please_Me/10_-_Baby_It's_You                 286 beats  acc=0.738  flip=0.168
+  [G] 10CD2_-_The_Beatles/CD2_-_05_-_Sexy_Sadie                242 beats  acc=0.744  flip=0.407
+  [G] 09_-_Magical_Mystery_Tour/05_-_Your_Mother_Should_Know   281 beats  acc=0.779  flip=0.236
+  [G] 05_-_Help!/12_-_I've_Just_Seen_a_Face                    240 beats  acc=0.796  flip=0.184
+  [G] 02_-_With_the_Beatles/05_-_Little_Child                  261 beats  acc=0.812  flip=0.131
+  [G] 02_-_With_the_Beatles/11_-_I_Wanna_Be_Your_Man           185 beats  acc=0.816  flip=0.071
+  [G] 09_-_Magical_Mystery_Tour/04_-_Blue_Jay_Way              327 beats  acc=0.844  flip=0.000
+
+Model saved to models/chord_transformer_crf_t5.pt
+File size: 2649 KB
