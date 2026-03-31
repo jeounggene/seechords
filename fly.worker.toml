@@ -1,0 +1,8 @@
+# fly.worker.toml — SeeChords worker (ephemeral ML analysis machines)
+# These machines are spawned on-demand via Fly Machines API and auto-destroy.
+
+app = 'seechords-worker'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = "Dockerfile.worker"

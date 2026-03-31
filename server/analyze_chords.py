@@ -513,22 +513,65 @@ def _extract_cqt(audio_path, sr=22050, hop_length=2048, n_bins=144,
     return np.log(np.abs(cqt) + 1e-6).T.astype(np.float32)
 
 
+def _gaussian_smooth_logits(logits_np, kernel_size=9):
+    """Apply 1D Gaussian smoothing to frame-level logits (ChordMini-style).
+
+    Each of the 170 class channels is convolved independently with a normalized
+    Gaussian kernel (sigma = kernel_size / 6, per the three-sigma rule).
+    Boundary frames use replicate padding.
+    """
+    if logits_np.shape[0] < kernel_size:
+        return logits_np
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    sigma = kernel_size / 6.0
+    half = kernel_size // 2
+    x = np.arange(kernel_size, dtype=np.float32) - half
+    gauss = np.exp(-0.5 * (x / sigma) ** 2)
+    gauss /= gauss.sum()
+
+    n_frames, n_classes = logits_np.shape
+    padded = np.pad(logits_np, ((half, half), (0, 0)), mode='edge')
+    smoothed = np.zeros_like(logits_np)
+    for c in range(n_classes):
+        smoothed[:, c] = np.convolve(padded[:, c], gauss, mode='valid')
+    return smoothed
+
+
+def _majority_filter(preds, kernel_size=9):
+    """Replace each frame's prediction with the majority class in a local window."""
+    n = len(preds)
+    if n < kernel_size:
+        return preds
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    half = kernel_size // 2
+    padded = np.pad(preds, (half, half), mode='edge')
+    filtered = np.empty_like(preds)
+    for i in range(n):
+        window = padded[i:i + kernel_size]
+        labels, counts = np.unique(window, return_counts=True)
+        max_count = counts.max()
+        candidates = labels[counts == max_count]
+        filtered[i] = preds[i] if preds[i] in candidates else candidates[0]
+    return filtered
+
+
 def _btc_decode_chords(audio_path, beat_times):
-    """Run BTC model on CQT features, sync to beat times.
+    """Run BTC model on CQT features with ChordMini-style inference pipeline.
 
-    Args:
-        audio_path: path to audio file
-        beat_times: list of beat times in seconds (from Essentia)
-
-    Returns:
-        list of chord name strings (one per beat), or None on failure
+    Improvements over basic argmax:
+    - 75% overlap sliding windows (stride = seq_len * 0.25)
+    - Logit accumulation across overlapping windows
+    - Gaussian temporal smoothing on averaged logits (kernel=9, sigma=1.5)
+    - Majority filter on final frame predictions
+    - Per-beat majority vote to sync frames to beats
     """
     import torch
     from btc_model.vocab import btc_idx_to_display
 
     model, device, mean, std = _load_btc_model()
 
-    # Extract CQT and normalize
     cqt = _extract_cqt(audio_path)
     cqt = (cqt - mean) / max(std, 1e-6)
 
@@ -537,9 +580,8 @@ def _btc_decode_chords(audio_path, beat_times):
         return None
 
     seq_len = 108
-    stride = 54  # 50% overlap for better predictions at chunk boundaries
+    stride = max(1, int(seq_len * 0.25))  # 75% overlap (ChordMini-style)
 
-    # Accumulate logits with overlap averaging
     logit_sum = np.zeros((n_frames, 170), dtype=np.float32)
     logit_count = np.zeros(n_frames, dtype=np.float32)
 
@@ -565,20 +607,16 @@ def _btc_decode_chords(audio_path, beat_times):
             if pos >= n_frames:
                 break
 
-    # Average overlapping logits
     logit_count[logit_count == 0] = 1.0
     avg_logits = logit_sum / logit_count[:, np.newaxis]
 
-    # Frame-level predictions
-    frame_preds = avg_logits.argmax(axis=1)
+    # Gaussian temporal smoothing on logits before argmax
+    avg_logits = _gaussian_smooth_logits(avg_logits, kernel_size=9)
 
-    # Temporal smoothing: replace isolated single-frame predictions
-    if len(frame_preds) >= 3:
-        smoothed = frame_preds.copy()
-        for i in range(1, len(smoothed) - 1):
-            if smoothed[i - 1] == smoothed[i + 1] and smoothed[i] != smoothed[i - 1]:
-                smoothed[i] = smoothed[i - 1]
-        frame_preds = smoothed
+    frame_preds = avg_logits.argmax(axis=1).astype(np.int64)
+
+    # Majority filter to clean up isolated spurious predictions
+    frame_preds = _majority_filter(frame_preds, kernel_size=9)
 
     # Sync frame-level predictions to beat times via majority vote
     hop_dur = 2048 / 22050.0  # ~0.093s per CQT frame
@@ -598,7 +636,6 @@ def _btc_decode_chords(audio_path, beat_times):
         if len(segment) == 0:
             beat_chords.append('N')
             continue
-        # Majority vote
         counts = np.bincount(segment, minlength=170)
         winner = int(counts.argmax())
         beat_chords.append(btc_idx_to_display(winner))
@@ -745,6 +782,25 @@ def _gate_leading_silence_beats(audio_eq, beat_times, chord_labels, sr, rel_frac
     return out
 
 
+def _uniformize_beat_times(beat_times, bpm):
+    """Replace beat times with a fixed grid t_i = t0 + i * (60/bpm).
+
+    Chord labels stay index-aligned; only timestamps change. Used so the client
+    timeline scrolls at constant speed (equal px per beat ↔ equal seconds per beat).
+
+    Set UNIFORM_BEAT_GRID=0 to keep detector-native irregular beat times.
+    """
+    if not beat_times or len(beat_times) < 2:
+        return list(beat_times) if beat_times else []
+    if os.environ.get('UNIFORM_BEAT_GRID', '1').lower() in ('0', 'false', 'no'):
+        return list(beat_times)
+    bpm = float(max(40.0, min(300.0, float(bpm))))
+    interval = 60.0 / bpm
+    t0 = float(beat_times[0])
+    n = len(beat_times)
+    return [round(t0 + i * interval, 3) for i in range(n)]
+
+
 def _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
                             skip_silence_gate=False):
     """Shared post-processing: silence gate, smoothing, merge segments."""
@@ -770,11 +826,14 @@ def _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
                 smoothed[i] = smoothed[i - 1]
         final_path = smoothed
 
+    beat_times = _uniformize_beat_times(beat_times, bpm)
+    iv_tail = (beat_times[1] - beat_times[0]) if len(beat_times) >= 2 else 0.5
+
     # Merge consecutive identical chords into timed segments
     merged = []
     for i, chord_name in enumerate(final_path):
         start = beat_times[i]
-        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + 0.5
+        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + iv_tail
         if merged and merged[-1]['chord'] == chord_name:
             merged[-1]['end'] = round(end, 3)
         else:

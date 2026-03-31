@@ -1,11 +1,14 @@
 {
   "manifest_version": 3,
   "name": "SeeChords",
-  "version": "1.0.0",
-  "description": "Overlay chord diagrams on YouTube videos, powered by user-uploaded audio analysis.",
+  "version": "1.1.0",
+  "description": "Chord diagrams on YouTube — overlay or below the player, fullscreen-friendly, with beat-synced timeline. Upload or cached analysis.",
   "permissions": ["activeTab", "webRequest", "scripting"],
   "host_permissions": [
     "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://music.youtube.com/*",
     "*://*.googlevideo.com/*",
     "https://seechords.fly.dev/*"
   ],
@@ -14,7 +17,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*"
+      ],
       "js": ["content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
@@ -32,5 +40,16 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon128.png"],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://music.youtube.com/*"
+      ]
+    }
+  ]
 }

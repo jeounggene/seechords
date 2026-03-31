@@ -13,7 +13,7 @@ const API_BASE = 'https://seechords.fly.dev';
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CHECK_CHORDS') {
     fetchChords(msg.videoId).then(sendResponse);
-    return true; // async
+    return true;
   }
 
   if (msg.type === 'UPLOAD_AND_ANALYZE') {
@@ -42,12 +42,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'CHECK_AUDIO_STREAM') {
-    sendResponse({ available: true }); // always available now — we use backend yt-dlp fallback
+    sendResponse({ available: true });
     return false;
   }
 
   if (msg.type === 'EXTRACT_AND_ANALYZE') {
     extractAndAnalyze(msg.videoId, msg.title, sender.tab.id).then(sendResponse).catch(err => {
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
+
+  if (msg.type === 'ANALYZE_YOUTUBE') {
+    analyzeYoutubeBackend(msg.videoId, msg.title).then(sendResponse).catch(err => {
       sendResponse({ error: err.message });
     });
     return true;
@@ -62,41 +69,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     loadVersion(msg.versionId).then(sendResponse);
     return true;
   }
-
-  if (msg.type === 'RATE_CHORDS') {
-    rateChords(msg.versionId, msg.videoId, msg.stars).then(sendResponse);
-    return true;
-  }
-
-  if (msg.type === 'GET_RATING') {
-    getRating(msg.versionId).then(sendResponse);
-    return true;
-  }
 });
-
-async function rateChords(versionId, videoId, stars) {
-  try {
-    const res = await fetch(`${API_BASE}/api/rate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ versionId, videoId, stars }),
-    });
-    if (res.ok) return await res.json();
-    return { error: 'Failed to save rating' };
-  } catch (err) {
-    return { error: err.message };
-  }
-}
-
-async function getRating(versionId) {
-  try {
-    const res = await fetch(`${API_BASE}/api/rating/${versionId}`);
-    if (res.ok) return await res.json();
-    return { stars: 0 };
-  } catch (err) {
-    return { stars: 0 };
-  }
-}
 
 async function listVersions(videoId) {
   try {
@@ -155,32 +128,48 @@ async function uploadAndAnalyze(videoId, fileDataUrl, fileName, title) {
 
 async function extractAndAnalyze(videoId, title, tabId) {
   try {
-    // Strategy 1: Try to get audio stream URL from page and fetch directly
+    // Prefer: audio URL from the player + fetch in the extension (user’s IP), upload to /api/analyze
     const streamInfo = await getStreamInfo(tabId);
     if (streamInfo?.directUrl) {
-      console.log('[SeeChords] Trying direct stream fetch...');
+      console.log('[SeeChords] Trying direct stream fetch (client-side)...');
       try {
         const res = await fetch(streamInfo.directUrl);
         if (res.ok) {
           const blob = await res.blob();
-          if (blob.size > 10000) { // sanity check — real audio is >10KB
+          if (blob.size > 10000) {
             console.log('[SeeChords] Direct fetch succeeded, size:', blob.size);
-            const ext = streamInfo.mime?.includes('webm') ? '.webm' : '.mp4';
+            const ext = pickAudioExt(streamInfo.mime, streamInfo.directUrl);
             const form = new FormData();
             form.append('videoId', videoId);
             form.append('file', blob, `audio${ext}`);
             if (title) form.append('title', title);
             const apiRes = await fetch(`${API_BASE}/api/analyze`, { method: 'POST', body: form });
-            return await apiRes.json();
+            const data = await apiRes.json();
+            if (apiRes.ok && data.job_id && !data.error) {
+              return { ...data, audioSource: 'client_upload' };
+            }
+            console.log('[SeeChords] /api/analyze rejected, falling back to yt-dlp:', data);
+          } else {
+            console.log('[SeeChords] Direct fetch too small, falling back');
           }
+        } else {
+          console.log('[SeeChords] Direct fetch HTTP', res.status, 'falling back');
         }
-        console.log('[SeeChords] Direct fetch failed or too small, falling back to backend');
       } catch (e) {
         console.log('[SeeChords] Direct fetch error:', e.message);
       }
+    } else {
+      console.log('[SeeChords] No direct audio URL in player; using server yt-dlp');
     }
 
-    // Strategy 2: Let the backend download audio via yt-dlp
+    return { needServerDownload: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+async function analyzeYoutubeBackend(videoId, title) {
+  try {
     console.log('[SeeChords] Using backend yt-dlp for', videoId);
     const apiRes = await fetch(`${API_BASE}/api/analyze-youtube`, {
       method: 'POST',
@@ -188,10 +177,19 @@ async function extractAndAnalyze(videoId, title, tabId) {
       body: JSON.stringify({ videoId, title }),
     });
     const data = await apiRes.json();
-    return data;
+    return { ...data, audioSource: 'youtube_dl' };
   } catch (err) {
     return { error: err.message };
   }
+}
+
+function pickAudioExt(mime, url) {
+  const m = (mime || '').toLowerCase();
+  const u = (url || '').toLowerCase();
+  if (m.includes('webm') || u.includes('.webm')) return '.webm';
+  if (m.includes('mp4') || m.includes('m4a') || u.includes('.m4a')) return '.m4a';
+  if (m.includes('audio/mp4')) return '.m4a';
+  return '.webm';
 }
 
 // Try to extract a direct audio stream URL from YouTube's player data
@@ -210,12 +208,21 @@ async function getStreamInfo(tabId) {
 
           const sd = pr.streamingData;
           const af = sd.adaptiveFormats || [];
-          const preferred = [140, 251, 250, 249];
+          const preferred = [140, 251, 250, 249, 256, 258, 141, 139];
 
-          // Check if any format has a direct URL
+          // Prefer known-good audio itags with a plain URL (no signatureCipher)
           for (const itag of preferred) {
             const fmt = af.find(f => f.itag === itag);
             if (fmt?.url) return { directUrl: fmt.url, mime: fmt.mimeType };
+          }
+
+          // Any adaptive audio stream with a direct URL
+          for (const f of af) {
+            if (!f.url) continue;
+            const mt = (f.mimeType || '').toLowerCase();
+            if (mt.includes('audio') || f.audioChannels || f.audioQuality) {
+              return { directUrl: f.url, mime: f.mimeType };
+            }
           }
 
           // Try constructing URL from serverAbrStreamingUrl
@@ -223,7 +230,6 @@ async function getStreamInfo(tabId) {
             const base = sd.serverAbrStreamingUrl;
             const audioFmt = af.find(f => f.itag === 140) || af.find(f => f.mimeType?.startsWith('audio/'));
             if (audioFmt) {
-              // Construct direct download URL
               const url = base.replace(/&sabr=[^&]*/, '') + '&itag=' + audioFmt.itag;
               return {
                 directUrl: url,

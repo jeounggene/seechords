@@ -27,10 +27,19 @@ let videoEl         = null;
 let offsetSeconds   = 0;     // user-adjustable timing offset
 let lastAlignResult = null;  // cached alignment response for "Use Chord Sheet"
 let currentVersionId = null; // active chord version ID
-let currentRating   = 0;    // current star rating (0 = unrated)
+/** 'verified' | 'user-uploaded' | etc. from API; controls Re-analyze visibility */
+let currentChordSource = null;
 
+/** Reparent overlay into document fullscreen so chords stay visible over the video. */
+let overlayFullscreenHandler = null;
+let overlayResizeHandler = null;
+let overlayResizeTimer = null;
+/** 'overlay' = docked on video (default); 'below' = classic panel under the video */
+let chordViewMode = 'overlay';
 
 const PX_PER_BEAT = 48;
+/** Extra beat-width cells before/after the song so first/last chords can scroll to center (intro/outro silence). */
+const TIMELINE_EDGE_BEATS = 14;
 /** Forces first applyChordDisplayFromVideoTime after tracking starts (avoids -1 === -1 skipping UI). */
 const SYNC_UNSET = -999;
 
@@ -460,15 +469,192 @@ function findVideoElement() {
          document.querySelector('video');
 }
 
+function getFullscreenElement() {
+  return (
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement ||
+    null
+  );
+}
+
+/** YouTube uses a div (e.g. #movie_player); raw <video> fullscreen cannot host HTML overlays. */
+function getFullscreenOverlayMountTarget(fs) {
+  if (!fs) return null;
+  if (fs.tagName === 'VIDEO') return null;
+  return fs;
+}
+
+function scheduleTimelineResize() {
+  if (!overlayEl) return;
+  clearTimeout(overlayResizeTimer);
+  overlayResizeTimer = setTimeout(() => {
+    if (typeof renderTimeline === 'function') renderTimeline();
+  }, 120);
+}
+
+/** YouTube watch / shorts: player box we overlay (bottom half of video). */
+function findVideoPlayerMount() {
+  return (
+    document.querySelector('#movie_player') ||
+    document.querySelector('ytd-shorts #player') ||
+    document.querySelector('ytd-player#player') ||
+    null
+  );
+}
+
+function ensureOverlayResizeHook() {
+  if (!overlayEl || !overlayEl.classList.contains('sc-overlay-on-video')) return;
+  if (overlayResizeHandler) return;
+  overlayResizeHandler = () => scheduleTimelineResize();
+  window.addEventListener('resize', overlayResizeHandler);
+}
+
+function removeOverlayResizeHook() {
+  if (overlayResizeHandler) {
+    window.removeEventListener('resize', overlayResizeHandler);
+    overlayResizeHandler = null;
+  }
+}
+
+/** Insert overlay in the page column below the player (legacy layout). */
+function insertOverlayBelowVideo() {
+  if (!overlayEl) return;
+  const targets = [
+    { sel: '#below', method: 'prepend' },
+    { sel: '#primary-inner', method: 'append' },
+    { sel: 'ytd-watch-metadata', method: 'after' },
+    { sel: '#player', method: 'after' },
+    { sel: 'ytd-watch-flexy #primary', method: 'prepend' },
+    { sel: 'ytd-watch-flexy', method: 'append' },
+    { sel: '#content', method: 'prepend' },
+  ];
+  for (const { sel, method } of targets) {
+    const container = document.querySelector(sel);
+    if (container) {
+      try {
+        if (method === 'prepend') container.prepend(overlayEl);
+        else if (method === 'after') container.after(overlayEl);
+        else container.appendChild(overlayEl);
+        console.log('[SeeChords] Panel below video via', method, sel);
+        return;
+      } catch (e) {
+        console.warn('[SeeChords] Below-video mount failed:', sel, e);
+      }
+    }
+  }
+  document.body.appendChild(overlayEl);
+  console.log('[SeeChords] Below-video fallback: body');
+}
+
+function updateViewToggleButton() {
+  const btn = document.getElementById('scToggle');
+  if (!btn) return;
+  if (chordViewMode === 'overlay') {
+    btn.textContent = '▾';
+    btn.title = 'Move panel below the video';
+  } else {
+    btn.textContent = '▴';
+    btn.title = 'Dock overlay on video (default)';
+  }
+}
+
+function applyChordViewMode(mode) {
+  if (!overlayEl) return;
+  const next = mode === 'below' ? 'below' : 'overlay';
+  if (next === chordViewMode) return;
+  chordViewMode = next;
+
+  if (next === 'below') {
+    removeOverlayResizeHook();
+    overlayEl.classList.remove('sc-overlay-on-video', 'sc-overlay-fs-document', 'sc-overlay-fallback-body');
+    overlayEl.classList.add('sc-overlay-below-video');
+    insertOverlayBelowVideo();
+  } else {
+    overlayEl.classList.remove('sc-overlay-below-video');
+    overlayEl.classList.add('sc-overlay-on-video');
+    const playerMount = findVideoPlayerMount();
+    if (playerMount) {
+      try {
+        playerMount.appendChild(overlayEl);
+        overlayEl.classList.remove('sc-overlay-fallback-body');
+      } catch (e) {
+        document.body.appendChild(overlayEl);
+        overlayEl.classList.add('sc-overlay-fallback-body');
+      }
+    } else {
+      document.body.appendChild(overlayEl);
+      overlayEl.classList.add('sc-overlay-fallback-body');
+    }
+    syncOverlayFullscreenPlacement();
+  }
+  updateViewToggleButton();
+  requestAnimationFrame(() => {
+    if (typeof renderTimeline === 'function') renderTimeline();
+  });
+}
+
+/** Inline player + document fullscreen: reparent overlay so it stays over the video. */
+function syncOverlayFullscreenPlacement() {
+  if (!overlayEl) return;
+  if (overlayEl.classList.contains('sc-overlay-below-video')) return;
+  const fs = getFullscreenElement();
+  const fsMount = getFullscreenOverlayMountTarget(fs);
+
+  if (fsMount) {
+    if (!overlayEl.classList.contains('sc-overlay-fs-document')) {
+      overlayEl._scRestoreParent = overlayEl.parentNode;
+      overlayEl._scRestoreNext = overlayEl.nextSibling;
+      fsMount.appendChild(overlayEl);
+      overlayEl.classList.add('sc-overlay-fs-document');
+    }
+    ensureOverlayResizeHook();
+  } else {
+    overlayEl.classList.remove('sc-overlay-fs-document');
+    const playerMount = findVideoPlayerMount();
+    if (playerMount && overlayEl.parentNode !== playerMount) {
+      if (overlayEl._scRestoreParent && overlayEl._scRestoreParent.isConnected) {
+        const p = overlayEl._scRestoreParent;
+        const n = overlayEl._scRestoreNext;
+        try {
+          if (n && n.parentNode === p) p.insertBefore(overlayEl, n);
+          else p.appendChild(overlayEl);
+        } catch (e) {
+          playerMount.appendChild(overlayEl);
+        }
+        delete overlayEl._scRestoreParent;
+        delete overlayEl._scRestoreNext;
+        overlayEl.classList.remove('sc-overlay-fallback-body');
+      } else {
+        try {
+          playerMount.appendChild(overlayEl);
+          overlayEl.classList.remove('sc-overlay-fallback-body');
+        } catch (e) {
+          /* keep current parent */
+        }
+      }
+    }
+    ensureOverlayResizeHook();
+  }
+  requestAnimationFrame(() => {
+    if (typeof renderTimeline === 'function') renderTimeline();
+  });
+}
+
 // ─── Overlay Injection ────────────────────────────────────
 function injectOverlay() {
   if (overlayEl) return;
 
   overlayEl = document.createElement('div');
   overlayEl.id = 'seechords-overlay';
+  const scLogoUrl = chrome.runtime.getURL('icons/icon128.png');
   overlayEl.innerHTML = `
     <div class="sc-header">
-      <span class="sc-logo">🎸 SeeChords</span>
+      <span class="sc-logo">
+        <img class="sc-logo-img" src="${scLogoUrl}" alt="SeeChords" width="128" height="128" />
+        <span class="sc-logo-text">SeeChords</span>
+      </span>
       <div class="sc-badges">
         <span class="sc-badge sc-badge-key" id="scKeyBadge">Key: —</span>
         <span class="sc-badge sc-badge-bpm" id="scBpmBadge">BPM: —</span>
@@ -487,14 +673,7 @@ function injectOverlay() {
         <select class="sc-version-select" id="scVersionSelect" title="Switch chord version"></select>
         <button class="sc-reupload-btn" id="scReuploadBtn" title="Re-analyze chords">↻ Re-analyze</button>
       </div>
-      <div class="sc-rating" id="scRating" style="display:none;">
-        <span class="sc-star" data-star="1">★</span>
-        <span class="sc-star" data-star="2">★</span>
-        <span class="sc-star" data-star="3">★</span>
-        <span class="sc-star" data-star="4">★</span>
-        <span class="sc-star" data-star="5">★</span>
-      </div>
-      <button class="sc-toggle-btn" id="scToggle" title="Minimize/Expand">▾</button>
+      <button type="button" class="sc-toggle-btn" id="scToggle" title="Move panel below the video">▾</button>
     </div>
     <div class="sc-body" id="scBody">
       <div class="sc-timeline" id="scTimeline">
@@ -531,62 +710,41 @@ function injectOverlay() {
     <div class="sc-status" id="scStatus"></div>
     <div class="sc-upload-prompt" id="scUploadPrompt" style="display:none;">
       <p class="sc-upload-msg">No chords found for this video.</p>
-      <button class="sc-analyze-btn" id="scAutoExtractBtn">Analyze &amp; Generate Chords</button>
+      <p class="sc-upload-sub">Run analysis on the SeeChords server (downloads audio with yt-dlp when needed).</p>
+      <p class="sc-upload-note">Because it's the first time this song is analyzed, it may take a few minutes.</p>
+      <button type="button" class="sc-analyze-btn" id="scAnalyzeServerBtn">Analyze this video</button>
       <div class="sc-progress" id="scProgress" style="display:none;">
-        <div class="sc-progress-bar" id="scProgressBar"></div>
-        <span class="sc-progress-msg" id="scProgressMsg">Processing…</span>
+        <div class="sc-progress-track" id="scProgressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="sc-progress-fill" id="scProgressFill"></div>
+        </div>
+        <div class="sc-progress-msg-row">
+          <span id="scProgressMsg">Processing…</span>
+          <span class="sc-progress-pct" id="scProgressPct" aria-hidden="true"></span>
+          <span class="sc-progress-eta" id="scProgressEta" aria-hidden="true"></span>
+        </div>
       </div>
-      <!-- Upload your own section (commented out)
-      <p class="sc-upload-sub" style="margin: 12px 0 8px; position: relative; text-align: center;">
-        <span style="background: rgba(30,30,30,0.9); padding: 0 8px; color: #666; font-size: 0.85em;">OR UPLOAD YOUR OWN</span>
-        <hr style="position: absolute; top: 50%; left: 0; right: 0; border: none; border-top: 1px solid #444; z-index: -1; margin: 0;">
-      </p>
-      <label class="sc-upload-label">
-        <input type="file" id="scFileInput" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,audio/*" />
-        <span class="sc-upload-btn-text">Choose Audio File</span>
-      </label>
-      <p class="sc-file-name" id="scFileName" style="display:none;"></p>
-      <label class="sc-rights-check">
-        <input type="checkbox" id="scRightsConfirm" />
-        <span>I confirm I have rights to upload this audio.</span>
-      </label>
-      <button class="sc-analyze-btn" id="scAnalyzeBtn" disabled>Upload &amp; Analyze</button>
-      -->
     </div>
   `;
 
-  // Insert below the video player — try multiple targets
-  const targets = [
-    { sel: '#below', method: 'prepend' },
-    { sel: '#primary-inner', method: 'append' },
-    { sel: 'ytd-watch-metadata', method: 'after' },
-    { sel: '#player', method: 'after' },
-    { sel: 'ytd-watch-flexy #primary', method: 'prepend' },
-    { sel: 'ytd-watch-flexy', method: 'append' },
-    { sel: '#content', method: 'prepend' },
-  ];
-  let inserted = false;
-  for (const { sel, method } of targets) {
-    const container = document.querySelector(sel);
-    if (container) {
-      try {
-        if (method === 'prepend') container.prepend(overlayEl);
-        else if (method === 'after') container.after(overlayEl);
-        else container.appendChild(overlayEl);
-        inserted = true;
-        console.log('[SeeChords] Overlay injected via', method, 'into:', sel);
-        break;
-      } catch (e) {
-        console.warn('[SeeChords] Failed to inject into', sel, e);
-      }
+  // Default: bottom half of the video frame (#movie_player / shorts player)
+  overlayEl.classList.add('sc-overlay-on-video');
+  const playerMount = findVideoPlayerMount();
+  if (playerMount) {
+    try {
+      playerMount.appendChild(overlayEl);
+      console.log('[SeeChords] Overlay docked on video player');
+    } catch (e) {
+      console.warn('[SeeChords] Failed to mount on player:', e);
+      document.body.appendChild(overlayEl);
     }
-  }
-  if (!inserted) {
+  } else {
     document.body.appendChild(overlayEl);
-    console.log('[SeeChords] Overlay appended to body (fallback)');
+    overlayEl.classList.add('sc-overlay-fallback-body');
+    console.log('[SeeChords] Overlay fallback: fixed to viewport (no #movie_player yet)');
   }
-  // Force visibility after injection
-  overlayEl.style.cssText = 'display:block!important;visibility:visible!important;opacity:1!important;';
+  overlayEl.style.setProperty('display', 'block', 'important');
+  overlayEl.style.setProperty('visibility', 'visible', 'important');
+  overlayEl.style.setProperty('opacity', '1', 'important');
 
   // Wire up events
   document.getElementById('scTransposeDown').addEventListener('click', () => {
@@ -621,67 +779,11 @@ function injectOverlay() {
   });
 
   document.getElementById('scToggle').addEventListener('click', () => {
-    const body = document.getElementById('scBody');
-    const btn  = document.getElementById('scToggle');
-    if (body.style.display === 'none') {
-      body.style.display = '';
-      btn.textContent = '▾';
-    } else {
-      body.style.display = 'none';
-      btn.textContent = '▸';
-    }
+    applyChordViewMode(chordViewMode === 'overlay' ? 'below' : 'overlay');
   });
+  updateViewToggleButton();
 
-  // Upload events
-  const autoExtractBtn = document.getElementById('scAutoExtractBtn');
-
-  function triggerAutoExtract() {
-    autoExtractBtn.disabled = true;
-    const progressDiv = document.getElementById('scProgress');
-    const progressBar = document.getElementById('scProgressBar');
-    const progressMsg = document.getElementById('scProgressMsg');
-    
-    progressDiv.style.display = 'block';
-    progressMsg.textContent = 'Extracting audio…';
-    progressBar.style.width = '10%';
-
-    chrome.runtime.sendMessage({
-      type: 'EXTRACT_AND_ANALYZE',
-      videoId: currentVideoId,
-      title: document.title
-    }, (response) => {
-      if (response && response.error) {
-        progressMsg.textContent = response.error;
-        autoExtractBtn.disabled = false;
-        return;
-      }
-      if (response && response.job_id) {
-        pollJob(response.job_id);
-      }
-    });
-  }
-
-  autoExtractBtn.addEventListener('click', triggerAutoExtract);
-
-  /* Upload section commented out — listeners disabled
-  const fileInput = document.getElementById('scFileInput');
-  const analyzeBtn = document.getElementById('scAnalyzeBtn');
-  const rightsCheck = document.getElementById('scRightsConfirm');
-  fileInput.addEventListener('change', () => {
-    const fileNameEl = document.getElementById('scFileName');
-    if (fileInput.files.length) {
-      fileNameEl.textContent = `${fileInput.files[0].name} selected`;
-      fileNameEl.style.display = 'block';
-    } else {
-      fileNameEl.style.display = 'none';
-    }
-    analyzeBtn.disabled = !(fileInput.files.length && rightsCheck.checked);
-  });
-  rightsCheck.addEventListener('change', () => {
-    analyzeBtn.disabled = !(fileInput.files.length && rightsCheck.checked);
-  });
-  analyzeBtn.addEventListener('click', () => startUploadAnalysis());
-  */
+  document.getElementById('scAnalyzeServerBtn').addEventListener('click', startServerAnalyze);
 
   // Version select — switch to a different chord version
   document.getElementById('scVersionSelect').addEventListener('change', (e) => {
@@ -696,6 +798,7 @@ function injectOverlay() {
 
   // Re-upload button — shows the upload prompt over the chord display
   document.getElementById('scReuploadBtn').addEventListener('click', () => {
+    if (currentChordSource === 'verified') return;
     showUploadPrompt();
   });
 
@@ -706,19 +809,62 @@ function injectOverlay() {
   document.getElementById('scCompareRun').addEventListener('click', runCompare);
   document.getElementById('scAlignRun').addEventListener('click', runAlign);
 
-  // Star rating events
-  document.querySelectorAll('#scRating .sc-star').forEach(star => {
-    star.addEventListener('click', () => submitRating(parseInt(star.dataset.star, 10)));
-    star.addEventListener('mouseenter', () => renderStars(parseInt(star.dataset.star, 10)));
-    star.addEventListener('mouseleave', () => renderStars(currentRating));
+  overlayFullscreenHandler = () => syncOverlayFullscreenPlacement();
+  document.addEventListener('fullscreenchange', overlayFullscreenHandler);
+  document.addEventListener('webkitfullscreenchange', overlayFullscreenHandler);
+  syncOverlayFullscreenPlacement();
+  [0, 400, 1500, 3000].forEach((ms) => {
+    setTimeout(() => {
+      if (!overlayEl || chordViewMode !== 'overlay') return;
+      if (!overlayEl.classList.contains('sc-overlay-fallback-body')) return;
+      const m = findVideoPlayerMount();
+      if (!m) return;
+      try {
+        m.appendChild(overlayEl);
+        overlayEl.classList.remove('sc-overlay-fallback-body');
+        syncOverlayFullscreenPlacement();
+      } catch (e) {
+        /* player not ready */
+      }
+    }, ms);
   });
 }
 
 function removeOverlay() {
+  if (overlayFullscreenHandler) {
+    document.removeEventListener('fullscreenchange', overlayFullscreenHandler);
+    document.removeEventListener('webkitfullscreenchange', overlayFullscreenHandler);
+    overlayFullscreenHandler = null;
+  }
+  removeOverlayResizeHook();
+  clearTimeout(overlayResizeTimer);
+  overlayResizeTimer = null;
   if (overlayEl) {
+    overlayEl.classList.remove(
+      'sc-overlay-fs-document',
+      'sc-overlay-on-video',
+      'sc-overlay-fallback-body',
+      'sc-overlay-below-video',
+    );
+    if (overlayEl._scRestoreParent) {
+      const p = overlayEl._scRestoreParent;
+      const n = overlayEl._scRestoreNext;
+      if (p && p.isConnected) {
+        try {
+          if (n && n.parentNode === p) p.insertBefore(overlayEl, n);
+          else p.appendChild(overlayEl);
+        } catch (e) {
+          /* remove below */
+        }
+      }
+      delete overlayEl._scRestoreParent;
+      delete overlayEl._scRestoreNext;
+    }
     overlayEl.remove();
     overlayEl = null;
   }
+  chordViewMode = 'overlay';
+  currentChordSource = null;
   stopTracking();
 }
 
@@ -754,6 +900,14 @@ function showChords() {
   if (body) body.style.display = '';
 }
 
+function updateReanalyzeButtonVisibility() {
+  const btn = document.getElementById('scReuploadBtn');
+  if (!btn) return;
+  const hide = currentChordSource === 'verified';
+  btn.style.display = hide ? 'none' : '';
+  btn.title = hide ? 'Verified — re-analysis disabled' : 'Re-analyze chords';
+}
+
 // ─── Render Timeline & Cards ──────────────────────────────
 function renderTimeline() {
   const row = document.getElementById('scTlRow');
@@ -771,7 +925,14 @@ function renderTimeline() {
   const tl = document.getElementById('scTimeline');
   const tlHalf = Math.ceil((tl ? tl.offsetWidth : 400) / 2 / PX_PER_BEAT);
   const makePad = () => { const p = document.createElement('div'); p.className = 'sc-beat-pad'; return p; };
+  const makeEdgeEmpty = () => {
+    const d = document.createElement('div');
+    d.className = 'sc-beat-block sc-beat-empty';
+    d.setAttribute('aria-hidden', 'true');
+    return d;
+  };
   for (let p = 0; p < tlHalf; p++) row.appendChild(makePad());
+  for (let e = 0; e < TIMELINE_EDGE_BEATS; e++) row.appendChild(makeEdgeEmpty());
 
   beatTimes.forEach((_, bi) => {
     const div = document.createElement('div');
@@ -800,6 +961,7 @@ function renderTimeline() {
     row.appendChild(div);
   });
 
+  for (let e = 0; e < TIMELINE_EDGE_BEATS; e++) row.appendChild(makeEdgeEmpty());
   for (let p = 0; p < tlHalf; p++) row.appendChild(makePad());
 }
 
@@ -876,7 +1038,7 @@ function applyChordDisplayFromVideoTime(videoTime) {
 
   if (bi !== currentBeatIdx) {
     currentBeatIdx = bi;
-    document.querySelectorAll('#scTlRow .sc-beat-block').forEach((el, idx) => {
+    document.querySelectorAll('#scTlRow .sc-beat-block:not(.sc-beat-empty)').forEach((el, idx) => {
       el.classList.toggle('sc-active', bi >= 0 && idx === bi);
     });
     const active = document.querySelector('#scTlRow .sc-beat-block.sc-active');
@@ -905,8 +1067,8 @@ function trackLoop() {
     return;
   }
 
-  // Update while paused too (seek / scrub) — not only during playback.
-  applyChordDisplayFromVideoTime(v.currentTime);
+  const vt = v.currentTime;
+  applyChordDisplayFromVideoTime(vt);
 
   rafId = requestAnimationFrame(trackLoop);
 }
@@ -922,82 +1084,262 @@ function stopTracking() {
   if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
 }
 
-// ─── Upload & Analyze ─────────────────────────────────────
-async function startUploadAnalysis() {
-  const fileInput = document.getElementById('scFileInput');
-  const f = fileInput.files && fileInput.files[0];
-  if (!f || !currentVideoId) return;
+// ─── Server analysis (yt-dlp / worker) ───────────────────
+let serverAnalyzePollTimer = null;
+/** Wall-clock start for ETA (set when user starts server analyze). */
+let serverAnalyzeStartedAtMs = 0;
+/** Last server progress % we saw; used to detect “stuck” so ETA does not balloon. */
+let serverAnalyzeLastProgressPct = null;
+let serverAnalyzeLastProgressAtMs = 0;
+/** True if we paused the page video during server analysis (resume when the job ends). */
+let serverAnalyzeWePausedVideo = false;
 
-  const progressDiv = document.getElementById('scProgress');
-  const progressBar = document.getElementById('scProgressBar');
-  const progressMsg = document.getElementById('scProgressMsg');
-  const analyzeBtn  = document.getElementById('scAnalyzeBtn');
-
-  progressDiv.style.display = 'block';
-  analyzeBtn.disabled = true;
-  progressMsg.textContent = 'Reading file…';
-
-  // Read file as data URL for transfer to background
-  const reader = new FileReader();
-  reader.onload = async () => {
-    progressMsg.textContent = 'Uploading…';
-    progressBar.style.width = '10%';
-
-    const response = await new Promise(resolve => {
-      chrome.runtime.sendMessage({
-        type: 'UPLOAD_AND_ANALYZE',
-        videoId: currentVideoId,
-        fileData: reader.result,
-        fileName: f.name,
-        title: document.title.replace(' - YouTube', '').trim(),
-      }, resolve);
-    });
-
-    if (response.error) {
-      progressMsg.textContent = `Error: ${response.error}`;
-      analyzeBtn.disabled = false;
-      return;
-    }
-
-    if (response.job_id) {
-      pollJob(response.job_id);
-    }
-  };
-  reader.readAsDataURL(f);
+function pauseVideoForServerAnalyze() {
+  const v = findVideoElement();
+  serverAnalyzeWePausedVideo = Boolean(v && !v.paused);
+  if (serverAnalyzeWePausedVideo) {
+    v.pause();
+  }
 }
 
-function pollJob(jobId) {
-  const progressBar = document.getElementById('scProgressBar');
-  const progressMsg = document.getElementById('scProgressMsg');
+function resumeVideoAfterServerAnalyzeIfNeeded() {
+  if (!serverAnalyzeWePausedVideo) return;
+  serverAnalyzeWePausedVideo = false;
+  const v = findVideoElement();
+  if (v) {
+    v.play().catch(() => {});
+  }
+}
 
-  const timer = setInterval(async () => {
-    const data = await new Promise(resolve => {
-      chrome.runtime.sendMessage({ type: 'POLL_STATUS', jobId }, resolve);
+/** Don’t extrapolate time from very early % — worker uses coarse steps (5% = long download). */
+const ETA_MIN_PCT = 12;
+/** If % hasn’t moved in this long, don’t show ETA (linear model is meaningless). */
+const ETA_STUCK_MS = 90000;
+
+function clampJobProgress(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function noteProgressForEta(pct) {
+  if (serverAnalyzeLastProgressPct !== pct) {
+    serverAnalyzeLastProgressPct = pct;
+    serverAnalyzeLastProgressAtMs = Date.now();
+  }
+}
+
+/** Linear extrapolation when progress % roughly tracks wall time (not valid at 5% for ages). */
+function estimateRemainingSeconds(pct, startedAtMs) {
+  if (!startedAtMs || pct < ETA_MIN_PCT || pct >= 100) return null;
+  const elapsedSec = (Date.now() - startedAtMs) / 1000;
+  if (elapsedSec < 0.5) return null;
+  const rem = (elapsedSec * (100 - pct)) / pct;
+  if (!Number.isFinite(rem) || rem < 0) return null;
+  if (rem > 7200) return null;
+  return rem;
+}
+
+function progressLooksStuck(pct) {
+  if (serverAnalyzeLastProgressPct !== pct) return false;
+  return Date.now() - serverAnalyzeLastProgressAtMs > ETA_STUCK_MS;
+}
+
+/** e.g. 45s, 2m 15s, 1m */
+function formatMinSec(totalSec) {
+  const s = Math.max(0, Math.round(totalSec));
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  if (m === 0) return `${sec}s`;
+  return sec ? `${m}m ${sec}s` : `${m}m`;
+}
+
+function applyServerJobProgress(data) {
+  const track = document.getElementById('scProgressTrack');
+  const fill = document.getElementById('scProgressFill');
+  const msgEl = document.getElementById('scProgressMsg');
+  const pctEl = document.getElementById('scProgressPct');
+  const etaEl = document.getElementById('scProgressEta');
+  if (!track || !fill || !msgEl) return;
+  const status = data.status;
+  const pct = clampJobProgress(data.progress);
+  const message = (data.message && String(data.message).trim()) || 'Processing…';
+  const indeterminate = status === 'pending' && pct === 0;
+  const hidePct = indeterminate || status === 'error';
+  noteProgressForEta(pct);
+  const showEta =
+    !indeterminate &&
+    status !== 'error' &&
+    status !== 'done' &&
+    serverAnalyzeStartedAtMs > 0 &&
+    !progressLooksStuck(pct);
+  let etaText = '';
+  if (showEta) {
+    const rem = estimateRemainingSeconds(pct, serverAnalyzeStartedAtMs);
+    if (rem != null) {
+      etaText = `~${formatMinSec(rem)} left`;
+    }
+  }
+
+  msgEl.textContent = message;
+  if (pctEl) pctEl.textContent = hidePct ? '' : `${pct}%`;
+  if (etaEl) etaEl.textContent = etaText ? ` · ${etaText}` : '';
+  track.classList.toggle('sc-progress-indeterminate', indeterminate);
+  track.setAttribute('aria-valuenow', indeterminate ? '0' : String(pct));
+  if (!indeterminate) {
+    fill.style.width = `${pct}%`;
+  } else {
+    fill.style.width = '0%';
+  }
+}
+
+function startServerAnalyze() {
+  if (!currentVideoId) return;
+  const btn = document.getElementById('scAnalyzeServerBtn');
+  const progressDiv = document.getElementById('scProgress');
+  if (btn) btn.disabled = true;
+  progressDiv.style.display = 'block';
+  serverAnalyzeStartedAtMs = Date.now();
+  serverAnalyzeLastProgressPct = null;
+  serverAnalyzeLastProgressAtMs = Date.now();
+  applyServerJobProgress({ status: 'pending', progress: 0, message: 'Fetching audio in your browser…' });
+
+  const title = document.title.replace(' - YouTube', '').trim();
+
+  (async () => {
+    const resp = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'EXTRACT_AND_ANALYZE', videoId: currentVideoId, title }, (r) => {
+        if (chrome.runtime.lastError) {
+          resolve({ error: chrome.runtime.lastError.message });
+          return;
+        }
+        resolve(r);
+      });
     });
 
-    if (data.status === 'processing') {
-      progressMsg.textContent = data.message || 'Processing…';
-      progressBar.style.width = (data.progress || 0) + '%';
+    const fail = (msg) => {
+      applyServerJobProgress({ status: 'error', progress: 0, message: msg });
+      if (btn) btn.disabled = false;
+      resumeVideoAfterServerAnalyzeIfNeeded();
+    };
+
+    if (!resp || resp.error) {
+      fail('Error: ' + (resp && resp.error ? resp.error : 'Unknown'));
       return;
     }
 
-    clearInterval(timer);
+    if (resp.needServerDownload) {
+      applyServerJobProgress({
+        status: 'pending',
+        progress: 0,
+        message: 'No direct stream — downloading on server…',
+      });
+      const r2 = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'ANALYZE_YOUTUBE', videoId: currentVideoId, title }, (x) => {
+          if (chrome.runtime.lastError) {
+            resolve({ error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(x);
+        });
+      });
+      if (!r2 || r2.error || !r2.job_id) {
+        fail('Error: ' + (r2 && r2.error ? r2.error : 'Server download failed'));
+        return;
+      }
+      pauseVideoForServerAnalyze();
+      pollAnalysisJob(r2.job_id);
+      return;
+    }
 
+    if (resp.job_id) {
+      pauseVideoForServerAnalyze();
+      if (resp.audioSource === 'youtube_dl') {
+        applyServerJobProgress({
+          status: 'pending',
+          progress: 0,
+          message: 'No direct stream in browser — downloading on server…',
+        });
+      } else if (resp.audioSource === 'client_upload') {
+        applyServerJobProgress({
+          status: 'processing',
+          progress: 8,
+          message: 'Upload received; analyzing…',
+        });
+      }
+      pollAnalysisJob(resp.job_id);
+    } else {
+      fail('Unexpected response from server.');
+    }
+  })();
+}
+
+function pollAnalysisJob(jobId) {
+  if (serverAnalyzePollTimer) {
+    clearInterval(serverAnalyzePollTimer);
+    serverAnalyzePollTimer = null;
+  }
+  const btn = document.getElementById('scAnalyzeServerBtn');
+  const progressDiv = document.getElementById('scProgress');
+
+  const tick = async () => {
+    const data = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'POLL_STATUS', jobId }, resolve);
+    });
+    if (!data) return;
+    if (data.status === 'not_found') {
+      if (serverAnalyzePollTimer) {
+        clearInterval(serverAnalyzePollTimer);
+        serverAnalyzePollTimer = null;
+      }
+      applyServerJobProgress({ status: 'error', progress: 0, message: 'Job not found.' });
+      if (btn) btn.disabled = false;
+      resumeVideoAfterServerAnalyzeIfNeeded();
+      return;
+    }
+    if (data.status === 'processing' || data.status === 'pending') {
+      console.debug('[SeeChords] job', jobId, data.status, data.progress, data.message);
+      applyServerJobProgress(data);
+      return;
+    }
+    if (serverAnalyzePollTimer) {
+      clearInterval(serverAnalyzePollTimer);
+      serverAnalyzePollTimer = null;
+    }
     if (data.status === 'done') {
-      // Re-fetch from API to get full data with versions list
-      const chordResponse = await new Promise(resolve => {
+      applyServerJobProgress({ status: 'done', progress: 100, message: 'Done!' });
+      const chordResponse = await new Promise((resolve) => {
         chrome.runtime.sendMessage({ type: 'CHECK_CHORDS', videoId: currentVideoId }, resolve);
       });
       if (chordResponse && chordResponse.found && chordResponse.data) {
+        progressDiv.style.display = 'none';
+        if (btn) btn.disabled = false;
+        resumeVideoAfterServerAnalyzeIfNeeded();
         loadChordData(chordResponse.data);
       } else {
-        loadChordData(data);
+        const track = document.getElementById('scProgressTrack');
+        if (track) track.classList.remove('sc-progress-indeterminate');
+        applyServerJobProgress({
+          status: 'done',
+          progress: 100,
+          message: 'Finished — chords not visible yet; reload the page in a moment.',
+        });
+        if (btn) btn.disabled = false;
+        resumeVideoAfterServerAnalyzeIfNeeded();
       }
+    } else if (data.status === 'error') {
+      applyServerJobProgress({ status: 'error', progress: clampJobProgress(data.progress), message: 'Error: ' + (data.message || 'Analysis failed') });
+      if (btn) btn.disabled = false;
+      resumeVideoAfterServerAnalyzeIfNeeded();
     } else {
-      progressMsg.textContent = `Error: ${data.message || 'Unknown error'}`;
-      document.getElementById('scAnalyzeBtn').disabled = false;
+      applyServerJobProgress({ status: 'error', progress: 0, message: 'Error: ' + (data.message || data.status || 'failed') });
+      if (btn) btn.disabled = false;
+      resumeVideoAfterServerAnalyzeIfNeeded();
     }
-  }, 2000);
+  };
+
+  tick();
+  serverAnalyzePollTimer = setInterval(tick, 2000);
 }
 
 // ─── Compare with chord sheet ─────────────────────────────
@@ -1161,6 +1503,8 @@ function loadChordData(data) {
   document.getElementById('scBpmBadge').textContent = `BPM: ${bpm}`;
   document.getElementById('scTransposeLabel').textContent = 'Original';
 
+  currentChordSource = data.source || null;
+
   // Show the version controls
   const vc = document.getElementById('scVersionControls');
   if (vc) vc.style.display = 'flex';
@@ -1174,22 +1518,20 @@ function loadChordData(data) {
   // Populate version dropdown
   currentVersionId = data.versionId || null;
   if (currentVideoId) fetchVersionsList(currentVideoId, data.versionId);
-
-  // Show rating widget and fetch existing rating
-  if (currentVersionId) {
-    const ratingEl = document.getElementById('scRating');
-    if (ratingEl) ratingEl.style.display = 'flex';
-    fetchRating(currentVersionId);
-  }
+  updateReanalyzeButtonVisibility();
 }
 
 function fetchVersionsList(videoId, activeVersionId) {
   chrome.runtime.sendMessage({ type: 'LIST_VERSIONS', videoId }, (resp) => {
     const sel = document.getElementById('scVersionSelect');
-    if (!sel || !resp || !resp.versions) return;
+    if (!sel || !resp || !resp.versions) {
+      updateReanalyzeButtonVisibility();
+      return;
+    }
     sel.innerHTML = '';
     if (resp.versions.length <= 1) {
       sel.style.display = 'none';
+      updateReanalyzeButtonVisibility();
       return;
     }
     sel.style.display = '';
@@ -1207,40 +1549,14 @@ function fetchVersionsList(videoId, activeVersionId) {
       if (v.versionId === activeVersionId || v.isActive) opt.selected = true;
       sel.appendChild(opt);
     });
+    updateReanalyzeButtonVisibility();
   });
 }
-
-function fetchRating(versionId) {
-  chrome.runtime.sendMessage({ type: 'GET_RATING', versionId }, (resp) => {
-    currentRating = (resp && resp.stars) || 0;
-    renderStars(currentRating);
-  });
-}
-
-function renderStars(rating) {
-  const stars = document.querySelectorAll('#scRating .sc-star');
-  stars.forEach(s => {
-    const val = parseInt(s.dataset.star, 10);
-    s.classList.toggle('sc-star-active', val <= rating);
-  });
-}
-
-function submitRating(stars) {
-  if (!currentVersionId || !currentVideoId) return;
-  currentRating = stars;
-  renderStars(stars);
-  chrome.runtime.sendMessage({
-    type: 'RATE_CHORDS',
-    versionId: currentVersionId,
-    videoId: currentVideoId,
-    stars,
-  });
-}
-
 
 // ─── Main Check Flow ──────────────────────────────────────
 async function checkForChords(videoId) {
   currentVideoId = videoId;
+  currentChordSource = null;
   transposeSteps  = 0;
   offsetSeconds   = 0;
   currentBeatIdx  = -1;

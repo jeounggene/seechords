@@ -30,6 +30,17 @@ training/data/*/audio/
 server/uploads/*.m4a
 server/uploads/*.mp3
 server/uploads/*.wav
+server/uploads/wav_cache/
 
 # Training logs (reproducible from training scripts)
 training/logs/*.log
+
+# yt-dlp Netscape cookies (set YTDLP_COOKIEFILE; never commit real sessions)
+yt_cookies.txt
+**/yt_cookies.txt
+# Local browser exports (never commit)
+cookies.txt
+cookies-youtube.txt
+
+# Chrome extension zip (regenerate locally for store upload)
+dist/

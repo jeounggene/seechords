@@ -14,13 +14,25 @@
     .header {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
       margin-bottom: 14px;
     }
+    /* Same logo/wordmark ratio as marketing site (1.5556em) */
     .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.43em;
       font-size: 1.2rem;
       font-weight: 800;
       color: #fff;
+    }
+    .logo-img {
+      width: 1.5556em;
+      height: 1.5556em;
+      flex-shrink: 0;
+      border-radius: 0.178em;
+      object-fit: contain;
+      display: block;
     }
     .tagline {
       font-size: .75rem;
@@ -63,7 +75,10 @@
 </head>
 <body>
   <div class="header">
-    <span class="logo">🎸 SeeChords</span>
+    <span class="logo">
+      <img class="logo-img" src="icons/icon128.png" alt="SeeChords" width="128" height="128" />
+      <span>SeeChords</span>
+    </span>
   </div>
   <p class="tagline" style="margin-bottom: 14px;">Chord overlays on YouTube videos</p>
 
@@ -72,7 +87,7 @@
     <div class="status-msg" id="statusMsg">Looking for current video…</div>
   </div>
 
-  <div class="footer">SeeChords v1.0 — Chords overlay for YouTube</div>
+  <div class="footer">SeeChords v1.1 — Overlay, panel & fullscreen</div>
 
   <script src="popup.js"></script>
 </body>

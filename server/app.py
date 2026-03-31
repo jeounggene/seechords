@@ -7,23 +7,29 @@ Endpoints:
   POST /api/analyze              → upload MP3 + videoId, returns job_id
   GET  /api/status/<job_id>      → poll analysis progress
   GET  /api/health               → diagnostic info
+  GET/PUT /api/internal/wav-cache/<videoId> → worker-only WAV cache (Bearer WAV_CACHE_SECRET);
+    WAV also mirrored to Turso table wav_cache_backups when WAV_BACKUP_TO_DB=1 (default).
 """
 import os
 import sys
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'   # prevent OpenMP crash (essentia + torch)
+import base64
 import uuid
 import threading
 import shutil
 import re
 import json
-import sqlite3
 import time
 import subprocess
 
 from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
-import librosa
 import numpy as np
+try:
+    import libsql_experimental as libsql
+except ImportError:
+    import sqlite3
+    libsql = sqlite3
 
 # Fix macOS Python SSL
 try:
@@ -35,19 +41,159 @@ except ImportError:
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
-DB_PATH              = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'seechords.db'))
+TURSO_URL   = os.environ.get('TURSO_DATABASE_URL', '')
+TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
 UPLOAD_DIR           = os.environ.get('UPLOAD_DIR', os.path.join(os.path.dirname(__file__), 'uploads'))
+# YouTube-derived WAVs (per video_id) for faster re-analysis without yt-dlp (ChordMini-style cache).
+WAV_CACHE_DIR        = os.environ.get('WAV_CACHE_DIR', os.path.join(UPLOAD_DIR, 'wav_cache'))
 TRAINING_VERIFIED_DIR = os.path.join(os.path.dirname(__file__), '..', 'training', 'data', 'verified')
 SERVER_VERIFIED_DIR  = os.path.join(os.path.dirname(__file__), 'verified')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(WAV_CACHE_DIR, exist_ok=True)
+
+
+def _ytdlp_cookiefile():
+    """Netscape-format cookies.txt for yt-dlp. Set env YTDLP_COOKIEFILE to the file path."""
+    p = (os.environ.get('YTDLP_COOKIEFILE') or '').strip()
+    return p if p and os.path.isfile(p) else None
+
+
+def _normalize_ytdlp_cookies_b64(s: str) -> str:
+    """Strip whitespace/newlines so Fly secrets and shell quoting don't break base64 decode."""
+    return ''.join((s or '').split())
+
+
+def _wav_cache_path(video_id: str) -> str:
+    """Path to cached 44.1kHz mono WAV for a YouTube video ID."""
+    return os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')
+
+
+def _wav_backup_to_db_enabled() -> bool:
+    v = (os.environ.get('WAV_BACKUP_TO_DB') or '1').strip().lower()
+    return v not in ('0', 'false', 'no')
+
+
+def _wav_backup_max_bytes() -> int:
+    return int(os.environ.get(
+        'WAV_BACKUP_MAX_BYTES',
+        os.environ.get('WAV_CACHE_MAX_BYTES', str(200 * 1024 * 1024)),
+    ))
+
+
+def _wav_db_backup_put(video_id: str, raw: bytes) -> None:
+    """Mirror WAV to Turso/SQLite so audio survives API disk loss."""
+    if not _wav_backup_to_db_enabled() or not raw:
+        return
+    if len(raw) > _wav_backup_max_bytes():
+        print(f'[SeeChords] WAV DB backup skipped for {video_id} (over WAV_BACKUP_MAX_BYTES)', flush=True)
+        return
+    try:
+        con = _get_db()
+        con.execute(
+            'INSERT OR REPLACE INTO wav_cache_backups (video_id, wav_data, bytes, created_at) '
+            'VALUES (?, ?, ?, ?)',
+            (video_id, raw, len(raw), int(time.time())),
+        )
+        con.commit()
+        con.close()
+        print(f'[SeeChords] WAV DB backup stored {video_id} ({len(raw)} bytes)', flush=True)
+    except Exception as e:
+        print(f'[SeeChords] WAV DB backup failed: {e}', flush=True)
+
+
+def _wav_db_backup_get(video_id: str):
+    """Return WAV bytes from DB or None."""
+    try:
+        con = _get_db()
+        row = con.execute(
+            'SELECT wav_data FROM wav_cache_backups WHERE video_id = ?', (video_id,),
+        ).fetchone()
+        con.close()
+        if not row:
+            return None
+        if isinstance(row, dict):
+            return row.get('wav_data')
+        return row[0]
+    except Exception as e:
+        print(f'[SeeChords] WAV DB read failed: {e}', flush=True)
+        return None
+
+
+def _rehydrate_wav_cache_from_db(video_id: str) -> bool:
+    """Restore filesystem cache from DB if missing or too small."""
+    path = _wav_cache_path(video_id)
+    if os.path.isfile(path) and os.path.getsize(path) >= 4096:
+        return True
+    raw = _wav_db_backup_get(video_id)
+    if not raw or len(raw) < 4096:
+        return False
+    try:
+        os.makedirs(WAV_CACHE_DIR, exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(raw)
+        os.chmod(path, 0o644)
+        print(f'[SeeChords] Rehydrated WAV cache from DB for {video_id}', flush=True)
+        return True
+    except OSError as e:
+        print(f'[SeeChords] WAV rehydrate from DB failed: {e}', flush=True)
+        return False
+
+
+def _wav_cache_auth_ok() -> bool:
+    secret = (os.environ.get('WAV_CACHE_SECRET') or '').strip()
+    if not secret:
+        return False
+    auth = request.headers.get('Authorization', '')
+    return auth == f'Bearer {secret}'
+
+
+def _worker_wav_cache_env():
+    """Env for workers: upload/fetch WAV cache via API (internal routes)."""
+    base = (os.environ.get('PUBLIC_APP_URL') or 'https://seechords.fly.dev').strip().rstrip('/')
+    out = {'PUBLIC_APP_URL': base}
+    secret = (os.environ.get('WAV_CACHE_SECRET') or '').strip()
+    if secret:
+        out['WAV_CACHE_SECRET'] = secret
+    return out
+
+
+def _worker_youtube_cookie_env():
+    """Env keys to pass to ephemeral Fly workers so yt-dlp can use cookies.
+
+    Worker VMs do not share the API's filesystem: YTDLP_COOKIEFILE paths on the API
+    are useless there unless we embed file bytes. Prefer YTDLP_COOKIES_B64 on the API
+    (Fly secret), or a readable YTDLP_COOKIEFILE on the API which we re-encode here.
+    """
+    b64 = _normalize_ytdlp_cookies_b64(os.environ.get('YTDLP_COOKIES_B64') or '')
+    if b64:
+        return {'YTDLP_COOKIES_B64': b64}
+    cf = _ytdlp_cookiefile()
+    if cf:
+        try:
+            with open(cf, 'rb') as f:
+                data = f.read()
+            return {'YTDLP_COOKIES_B64': base64.b64encode(data).decode('ascii')}
+        except OSError as e:
+            print(f'[SeeChords] Cannot read YTDLP_COOKIEFILE {cf}: {e}', flush=True)
+    return {}
+
 
 # ─────────────────────────────────────────────
-# SQLite persistent cache
+# Turso (libsql) persistent cache
 # ─────────────────────────────────────────────
+
+def _get_db():
+    """Return a libsql connection to Turso (remote) or local SQLite fallback."""
+    if TURSO_URL:
+        con = libsql.connect(database=TURSO_URL, auth_token=TURSO_TOKEN)
+    else:
+        db_path = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'seechords.db'))
+        con = libsql.connect(database=db_path)
+    return con
+
 
 def _init_db():
-    con = sqlite3.connect(DB_PATH)
-    # New versioned table
+    con = _get_db()
     con.execute('''
         CREATE TABLE IF NOT EXISTS chord_versions (
             version_id  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,54 +201,66 @@ def _init_db():
             title       TEXT,
             key         TEXT,
             bpm         REAL,
-            chords      TEXT,   -- JSON array
-            beat_times  TEXT,   -- JSON array
+            chords      TEXT,
+            beat_times  TEXT,
             source      TEXT DEFAULT 'user-uploaded',
             analyzed_at INTEGER,
             is_active   INTEGER DEFAULT 0
         )
     ''')
     con.execute('CREATE INDEX IF NOT EXISTS idx_cv_video ON chord_versions(video_id)')
-    # Ratings table
     con.execute('''
-        CREATE TABLE IF NOT EXISTS ratings (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            version_id  INTEGER NOT NULL,
-            video_id    TEXT NOT NULL,
-            stars       INTEGER NOT NULL CHECK(stars BETWEEN 1 AND 5),
-            created_at  INTEGER
+        CREATE TABLE IF NOT EXISTS jobs (
+            job_id     TEXT PRIMARY KEY,
+            video_id   TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'pending',
+            progress   INTEGER DEFAULT 0,
+            message    TEXT,
+            result     TEXT,
+            worker_id  TEXT,
+            created_at INTEGER,
+            updated_at INTEGER
         )
     ''')
-    con.execute('CREATE INDEX IF NOT EXISTS idx_ratings_version ON ratings(version_id)')
-    # Migrate old chords table if it exists
-    cur = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chords'")
-    if cur.fetchone():
-        rows = con.execute('SELECT * FROM chords').fetchall()
-        for r in rows:
-            con.execute('''
-                INSERT INTO chord_versions
-                    (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            ''', (r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]))
-        con.execute('DROP TABLE chords')
+    con.execute('CREATE INDEX IF NOT EXISTS idx_jobs_video ON jobs(video_id)')
+    con.execute('''
+        CREATE TABLE IF NOT EXISTS wav_cache_backups (
+            video_id   TEXT PRIMARY KEY,
+            wav_data   BLOB NOT NULL,
+            bytes      INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    ''')
     con.commit()
     con.close()
 
 _init_db()
 
 
+_CV_COLS = ['version_id', 'video_id', 'title', 'key', 'bpm',
+            'chords', 'beat_times', 'source', 'analyzed_at', 'is_active']
+
+
+def _row_to_dict(row, cols):
+    """Convert a tuple row to a dict using column names."""
+    if isinstance(row, dict):
+        return row
+    return dict(zip(cols, row))
+
+
 def _version_row_to_dict(row):
+    d = _row_to_dict(row, _CV_COLS) if not isinstance(row, dict) else row
     return {
-        'versionId':  row['version_id'],
-        'videoId':    row['video_id'],
-        'title':      row['title'],
-        'key':        row['key'],
-        'bpm':        row['bpm'],
-        'chords':     json.loads(row['chords']),
-        'beat_times': json.loads(row['beat_times']),
-        'source':     row['source'],
-        'analyzedAt': row['analyzed_at'],
-        'isActive':   bool(row['is_active']),
+        'versionId':  d['version_id'],
+        'videoId':    d['video_id'],
+        'title':      d['title'],
+        'key':        d['key'],
+        'bpm':        d['bpm'],
+        'chords':     json.loads(d['chords']) if isinstance(d['chords'], str) else d['chords'],
+        'beat_times': json.loads(d['beat_times']) if isinstance(d['beat_times'], str) else d['beat_times'],
+        'source':     d['source'],
+        'analyzedAt': d['analyzed_at'],
+        'isActive':   bool(d['is_active']),
     }
 
 
@@ -161,8 +319,7 @@ def _import_verified():
         vmap = json.load(f)
 
     label_dir = os.path.join(SERVER_VERIFIED_DIR, 'labels')
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
+    con = _get_db()
 
     for stem, meta in vmap.items():
         video_id = meta['videoId']
@@ -171,7 +328,6 @@ def _import_verified():
         if not os.path.isfile(lab_path):
             continue
 
-        # Skip if a verified version already exists for this video
         existing = con.execute(
             "SELECT version_id FROM chord_versions WHERE video_id = ? AND source = 'verified'",
             (video_id,),
@@ -179,7 +335,6 @@ def _import_verified():
         if existing:
             continue
 
-        # Parse .lab file
         segments = []
         with open(lab_path) as f:
             for line in f:
@@ -199,7 +354,6 @@ def _import_verified():
         if not segments:
             continue
 
-        # Pull key/bpm/beat_times from video_map entry, fall back to DB
         key_val = meta.get('key')
         bpm_val = meta.get('bpm')
         beat_times_list = meta.get('beatTimes', [])
@@ -208,15 +362,19 @@ def _import_verified():
                 'SELECT key, bpm, beat_times FROM chord_versions WHERE video_id = ? ORDER BY version_id DESC LIMIT 1',
                 (video_id,),
             ).fetchone()
-            key_val = key_val or (ref['key'] if ref else '?')
-            bpm_val = bpm_val or (ref['bpm'] if ref else 120)
-            if not beat_times_list and ref and ref['beat_times']:
-                beat_times_list = json.loads(ref['beat_times'])
+            if ref:
+                rd = _row_to_dict(ref, ['key', 'bpm', 'beat_times'])
+                key_val = key_val or rd['key']
+                bpm_val = bpm_val or rd['bpm']
+                if not beat_times_list and rd['beat_times']:
+                    beat_times_list = json.loads(rd['beat_times'])
+            else:
+                key_val = key_val or '?'
+                bpm_val = bpm_val or 120
         if not beat_times_list:
             print(f"  WARNING: verified song '{stem}' has no beat_times (video_map empty, no DB fallback)")
         beat_times = json.dumps(beat_times_list)
 
-        # Deactivate all other versions, insert verified as active
         con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
         con.execute('''
             INSERT INTO chord_versions
@@ -233,9 +391,7 @@ _import_verified()
 
 def _cache_get(video_id: str):
     """Return the best version for a video: prefer verified, then active."""
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    # Prefer verified source, then is_active, then newest
+    con = _get_db()
     row = con.execute(
         '''SELECT * FROM chord_versions
            WHERE video_id = ?
@@ -249,9 +405,19 @@ def _cache_get(video_id: str):
     return _version_row_to_dict(row)
 
 
+def _has_verified_version(video_id: str) -> bool:
+    """True if this video has a human-verified chord row (re-analysis is disabled)."""
+    con = _get_db()
+    row = con.execute(
+        "SELECT 1 FROM chord_versions WHERE video_id = ? AND source = 'verified' LIMIT 1",
+        (video_id,),
+    ).fetchone()
+    con.close()
+    return row is not None
+
+
 def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
-    con = sqlite3.connect(DB_PATH)
-    # Delete any previous entries for this video
+    con = _get_db()
     con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
     con.execute('''
         INSERT INTO chord_versions
@@ -267,23 +433,63 @@ def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
 
 
 # ─────────────────────────────────────────────
-# In-memory job store
+# Job store (Turso-backed, survives restarts)
 # ─────────────────────────────────────────────
-_jobs = {}
-_jobs_lock = threading.Lock()
+
+def _create_job(job_id: str, video_id: str, **kwargs):
+    """Insert a new job row into Turso."""
+    con = _get_db()
+    con.execute(
+        '''INSERT INTO jobs (job_id, video_id, status, progress, message, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (job_id, video_id, kwargs.get('status', 'pending'),
+         kwargs.get('progress', 0), kwargs.get('message', ''),
+         int(time.time()), int(time.time())),
+    )
+    con.commit()
+    con.close()
 
 
 def _set_job(job_id, **kwargs):
-    with _jobs_lock:
-        if job_id in _jobs:
-            _jobs[job_id].update(kwargs)
-        else:
-            _jobs[job_id] = dict(kwargs)
+    """Update job fields in Turso. Stores full result as JSON blob when done."""
+    sets = ['updated_at = ?']
+    vals = [int(time.time())]
+    for col in ('status', 'progress', 'message', 'worker_id'):
+        if col in kwargs:
+            sets.append(f'{col} = ?')
+            vals.append(kwargs[col])
+    # When job is done, pack extra fields (chords, bpm, key, etc.) into result JSON
+    extra = {k: v for k, v in kwargs.items()
+             if k not in ('status', 'progress', 'message', 'worker_id', 'video_id')}
+    if extra:
+        sets.append('result = ?')
+        vals.append(json.dumps(extra, default=str))
+    vals.append(job_id)
+    con = _get_db()
+    con.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE job_id = ?", tuple(vals))
+    con.commit()
+    con.close()
 
 
 def _get_job(job_id):
-    with _jobs_lock:
-        return dict(_jobs.get(job_id, {'status': 'not_found'}))
+    """Read job from Turso and return a dict matching the old in-memory format."""
+    con = _get_db()
+    row = con.execute(
+        'SELECT job_id, video_id, status, progress, message, result, worker_id, created_at, updated_at FROM jobs WHERE job_id = ?',
+        (job_id,),
+    ).fetchone()
+    con.close()
+    if not row:
+        return {'status': 'not_found'}
+    cols = ['job_id', 'video_id', 'status', 'progress', 'message', 'result', 'worker_id', 'created_at', 'updated_at']
+    d = _row_to_dict(row, cols)
+    out = {'status': d['status'], 'progress': d['progress'] or 0, 'message': d['message'] or ''}
+    if d['result']:
+        try:
+            out.update(json.loads(d['result']))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -409,6 +615,7 @@ def detect_chords(audio_path: str, hop_size: float = 0.5):
 
 
 def _detect_chords_librosa(audio_path: str, hop_size: float = 0.5):
+    import librosa
     y, sr = librosa.load(audio_path, mono=True, sr=22050, duration=360)
     hop_length = 2048
 
@@ -458,10 +665,17 @@ def _detect_chords_librosa(audio_path: str, hop_size: float = 0.5):
                     best_ext_score = ext_score
         final_path.append(best_ext_name)
 
+    try:
+        from analyze_chords import _uniformize_beat_times
+        beat_times = _uniformize_beat_times(beat_times, float(tempo))
+    except Exception:
+        pass
+    iv_tail = (beat_times[1] - beat_times[0]) if len(beat_times) >= 2 else 0.5
+
     merged = []
     for i, chord_name in enumerate(final_path):
         start = beat_times[i]
-        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + 0.5
+        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + iv_tail
         if merged and merged[-1]['chord'] == chord_name:
             merged[-1]['end'] = round(end, 3)
         else:
@@ -476,9 +690,9 @@ def _clean_title(name: str) -> str:
     return title[:120] if title else 'Uploaded Audio'
 
 
-def _process_job(job_id: str, source_path: str, video_id: str, title: str):
-    """Analyze uploaded audio, store chords, delete audio file."""
-    # Normalize to WAV (lossless) — mp3 compression degrades Essentia BPM accuracy
+def _process_job_local(job_id: str, source_path: str, video_id: str, title: str):
+    """Analyze uploaded audio locally (librosa fallback), store chords, delete audio file.
+    Used for direct uploads to the API server when no worker is available."""
     temp_wav = os.path.join(UPLOAD_DIR, f'{job_id}.wav')
     try:
         _set_job(job_id, status='processing', progress=5, message='Preparing audio…')
@@ -544,10 +758,13 @@ def get_chords(video_id):
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Upload audio + videoId to analyze chords. Always allows re-upload."""
+    """Upload audio + videoId to analyze chords."""
     video_id = request.form.get('videoId', '').strip()
     if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
         return jsonify({'error': 'Invalid or missing videoId.'}), 400
+
+    if _has_verified_version(video_id):
+        return jsonify({'error': 'This video has verified chords; re-analysis is disabled.'}), 400
 
     file_obj = request.files.get('file')
     if not file_obj or not file_obj.filename:
@@ -560,7 +777,6 @@ def analyze():
         return jsonify({'error': 'Unsupported file type.'}), 400
 
     job_id = str(uuid.uuid4())
-    _set_job(job_id, status='processing', progress=0, message='Upload received…')
 
     source_ext = ext if ext else '.bin'
     source_path = os.path.join(UPLOAD_DIR, f'{job_id}_source{source_ext}')
@@ -568,16 +784,113 @@ def analyze():
 
     title = request.form.get('title', '').strip() or _clean_title(filename)
 
-    t = threading.Thread(target=_process_job, args=(job_id, source_path, video_id, title),
+    _create_job(job_id, video_id, status='processing', progress=0, message='Upload received…')
+
+    t = threading.Thread(target=_process_job_local, args=(job_id, source_path, video_id, title),
                          daemon=True)
     t.start()
 
     return jsonify({'job_id': job_id, 'cached': False})
 
 
+FLY_API_TOKEN = os.environ.get('FLY_API_TOKEN', '')
+FLY_WORKER_APP = os.environ.get('FLY_WORKER_APP', 'seechords-worker')
+FLY_WORKER_IMAGE = os.environ.get('FLY_WORKER_IMAGE', f'registry.fly.io/{os.environ.get("FLY_WORKER_APP", "seechords-worker")}:latest')
+
+
+def _spawn_worker(job_id: str, video_id: str, title: str = '', extra_env=None):
+    """Spawn an ephemeral Fly Machine to run chord analysis."""
+    import requests as req
+    cookie_env = _worker_youtube_cookie_env()
+    cache_env = _worker_wav_cache_env()
+    if cookie_env.get('YTDLP_COOKIES_B64'):
+        n = len(cookie_env['YTDLP_COOKIES_B64'])
+        print(f'[SeeChords] Worker spawn: forwarding YTDLP_COOKIES_B64 ({n} base64 chars)', flush=True)
+    else:
+        print(
+            '[SeeChords] Worker spawn: no cookie payload from API env '
+            '(set YTDLP_COOKIES_B64 or YTDLP_COOKIEFILE on app `seechords`; '
+            'or set YTDLP_COOKIES_B64 on `seechords-worker` if Fly merges app secrets).',
+            flush=True,
+        )
+    if not cache_env.get('WAV_CACHE_SECRET'):
+        print(
+            '[SeeChords] Worker spawn: WAV_CACHE_SECRET not set — workers cannot upload WAV cache '
+            '(set on app `seechords` for re-analysis without re-download).',
+            flush=True,
+        )
+    machine_env = {
+        'JOB_ID': job_id,
+        'VIDEO_ID': video_id,
+        'TITLE': title or '',
+        'TURSO_DATABASE_URL': TURSO_URL,
+        'TURSO_AUTH_TOKEN': TURSO_TOKEN,
+        'USE_BTC': '1',
+        'USE_BEAT_THIS': '1',
+        **cookie_env,
+        **cache_env,
+    }
+    if extra_env:
+        machine_env.update(extra_env)
+    resp = req.post(
+        f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
+        headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
+        json={
+            'config': {
+                'image': FLY_WORKER_IMAGE,
+                'env': machine_env,
+                'guest': {'cpu_kind': 'shared', 'cpus': 2, 'memory_mb': 4096},
+                'auto_destroy': True,
+            },
+        },
+        timeout=30,
+    )
+    if resp.status_code >= 400:
+        print(f'[SeeChords] Machines API error {resp.status_code}: {resp.text[:500]}', flush=True)
+        resp.raise_for_status()
+    machine_id = resp.json().get('id', '')
+    _set_job(job_id, worker_id=machine_id)
+    return machine_id
+
+
+@app.route('/api/internal/wav-cache/<video_id>', methods=['GET', 'PUT'])
+def internal_wav_cache(video_id):
+    """Store or retrieve cached WAV for a video (workers only; Bearer WAV_CACHE_SECRET)."""
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+    if not _wav_cache_auth_ok():
+        return jsonify({'error': 'Unauthorized.'}), 401
+    path = _wav_cache_path(video_id)
+    max_bytes = int(os.environ.get('WAV_CACHE_MAX_BYTES', str(200 * 1024 * 1024)))
+
+    if request.method == 'GET':
+        if (not os.path.isfile(path)) or os.path.getsize(path) < 4096:
+            if not _rehydrate_wav_cache_from_db(video_id):
+                return jsonify({'error': 'Not found.'}), 404
+        return send_file(path, mimetype='audio/wav', as_attachment=False, download_name=f'{video_id}.wav')
+
+    # PUT
+    raw = request.get_data()
+    if not raw or len(raw) < 4096:
+        return jsonify({'error': 'Body too small or empty.'}), 400
+    if len(raw) > max_bytes:
+        return jsonify({'error': 'File too large.'}), 413
+    try:
+        with open(path, 'wb') as f:
+            f.write(raw)
+        os.chmod(path, 0o644)
+    except OSError as e:
+        print(f'[SeeChords] WAV cache write failed: {e}', flush=True)
+        return jsonify({'error': 'Write failed.'}), 500
+    _wav_db_backup_put(video_id, raw)
+    print(f'[SeeChords] WAV cache stored {video_id} ({len(raw)} bytes)', flush=True)
+    return jsonify({'ok': True, 'bytes': len(raw)})
+
+
 @app.route('/api/analyze-youtube', methods=['POST'])
 def analyze_youtube():
-    """Download audio from YouTube via yt-dlp and analyze chords."""
+    """Download audio from YouTube via yt-dlp and analyze chords.
+    Spawns an ephemeral Fly worker machine for the heavy ML work."""
     data = request.get_json(silent=True) or {}
     video_id = (data.get('videoId') or '').strip()
     if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
@@ -585,64 +898,137 @@ def analyze_youtube():
 
     title = (data.get('title') or '').strip()
 
-    # Check if yt-dlp is available
-    ytdlp = shutil.which('yt-dlp')
-    if not ytdlp:
-        return jsonify({'error': 'yt-dlp not installed on server.'}), 500
+    if _has_verified_version(video_id):
+        return jsonify({'error': 'This video has verified chords; re-analysis is disabled.'}), 400
 
     job_id = str(uuid.uuid4())
-    _set_job(job_id, status='processing', progress=0, message='Downloading audio from YouTube…')
+    _create_job(job_id, video_id, status='pending', progress=0, message='Queued for analysis…')
 
-    def _download_and_process():
-        source_path = os.path.join(UPLOAD_DIR, f'{job_id}_source.m4a')
-        try:
-            _set_job(job_id, status='processing', progress=5, message='Downloading audio…')
-            yt_url = f'https://www.youtube.com/watch?v={video_id}'
-            result = subprocess.run(
-                [ytdlp, '-f', 'bestaudio[ext=m4a]/bestaudio',
-                 '--no-playlist', '--no-check-certificates',
-                 '-o', source_path, yt_url],
-                capture_output=True, text=True, timeout=120
-            )
-            if result.returncode != 0 or not os.path.exists(source_path):
-                err_msg = result.stderr[:300] if result.stderr else 'yt-dlp failed'
-                _set_job(job_id, status='error', message=f'Download failed: {err_msg}')
-                return
+    extra_env = {}
+    cache_path = _wav_cache_path(video_id)
+    cached_audio = False
+    has_secret = bool((os.environ.get('WAV_CACHE_SECRET') or '').strip())
+    if has_secret and (
+        (not os.path.isfile(cache_path)) or os.path.getsize(cache_path) < 4096
+    ):
+        _rehydrate_wav_cache_from_db(video_id)
+    if (
+        has_secret
+        and os.path.isfile(cache_path)
+        and os.path.getsize(cache_path) >= 4096
+    ):
+        extra_env['SKIP_YTDLP_DOWNLOAD'] = '1'
+        cached_audio = True
+        print(
+            f'[SeeChords] WAV cache hit for {video_id} ({os.path.getsize(cache_path)} bytes) — skipping download',
+            flush=True,
+        )
+    elif os.path.isfile(cache_path) and os.path.getsize(cache_path) >= 4096 and not has_secret:
+        print(
+            f'[SeeChords] WAV file exists for {video_id} but WAV_CACHE_SECRET unset — '
+            'full YouTube download will run. Set WAV_CACHE_SECRET to enable cache fetch on workers.',
+            flush=True,
+        )
 
-            _set_job(job_id, status='processing', progress=15, message='Download complete, analyzing…')
+    try:
+        machine_id = _spawn_worker(job_id, video_id, title, extra_env=extra_env)
+        msg = 'Worker started…' if not cached_audio else 'Using cached audio…'
+        _set_job(job_id, status='processing', progress=5, message=msg)
+        print(f'[SeeChords] Spawned worker {machine_id} for job {job_id} / video {video_id}', flush=True)
+    except Exception as e:
+        print(f'[SeeChords] Worker spawn failed: {e}', flush=True)
+        _set_job(job_id, status='error', message=f'Failed to start analysis worker: {e}')
 
-            if not title:
-                # Try to get title from yt-dlp
-                try:
-                    t_result = subprocess.run(
-                        [ytdlp, '--get-title', '--no-playlist', yt_url],
-                        capture_output=True, text=True, timeout=15
-                    )
-                    if t_result.returncode == 0 and t_result.stdout.strip():
-                        title_val = t_result.stdout.strip()
-                    else:
-                        title_val = video_id
-                except Exception:
-                    title_val = video_id
-            else:
-                title_val = title
-
-            _process_job(job_id, source_path, video_id, title_val)
-        except subprocess.TimeoutExpired:
-            _set_job(job_id, status='error', message='Download timed out')
-            if os.path.exists(source_path):
-                os.remove(source_path)
-        except Exception as e:
-            _set_job(job_id, status='error', message=str(e))
-
-    t = threading.Thread(target=_download_and_process, daemon=True)
-    t.start()
-    return jsonify({'job_id': job_id, 'cached': False})
+    return jsonify({'job_id': job_id, 'cached': False, 'cached_audio': cached_audio})
 
 
 @app.route('/api/status/<job_id>')
 def job_status(job_id):
     return jsonify(_get_job(job_id))
+
+
+@app.route('/api/analyze-chunk', methods=['POST'])
+def analyze_chunk():
+    """Analyze a short audio chunk (10-15s) from the extension's live capture.
+    Tries BTC neural model first, falls back to fast librosa chromagram path."""
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'error': 'No audio file provided.'}), 400
+    video_id = request.form.get('videoId', '').strip()
+    chunk_index = int(request.form.get('chunkIndex', '0'))
+    start_time = float(request.form.get('startTime', '0'))
+
+    temp_in = os.path.join(UPLOAD_DIR, f'chunk_{video_id}_{chunk_index}.webm')
+    temp_wav = os.path.join(UPLOAD_DIR, f'chunk_{video_id}_{chunk_index}.wav')
+    try:
+        f.save(temp_in)
+
+        subprocess.run(
+            ['ffmpeg', '-i', temp_in, '-vn', '-ar', '22050', '-ac', '1',
+             temp_wav, '-y'],
+            capture_output=True, timeout=30,
+        )
+        if not os.path.exists(temp_wav):
+            return jsonify({'error': 'Failed to convert audio chunk.'}), 500
+
+        chords_data, bpm_val, key_val, beat_times = detect_chords(temp_wav)
+
+        return jsonify({
+            'chords': chords_data,
+            'bpm': round(bpm_val, 1),
+            'key': key_val,
+            'beat_times': beat_times,
+            'chunkIndex': chunk_index,
+            'startTime': start_time,
+        })
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Chunk analysis failed: {exc}'}), 500
+    finally:
+        for path in (temp_in, temp_wav):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+
+@app.route('/api/save-streamed', methods=['POST'])
+def save_streamed():
+    """Save accumulated streamed chord results to the database."""
+    data = request.get_json(silent=True) or {}
+    video_id = (data.get('videoId') or '').strip()
+    if not video_id:
+        return jsonify({'error': 'Missing videoId.'}), 400
+
+    title = data.get('title', video_id)
+    key_val = data.get('key', '?')
+    bpm_val = data.get('bpm', 120)
+    chords_data = data.get('chords', [])
+    beat_times_data = data.get('beat_times', [])
+
+    if not chords_data:
+        return jsonify({'error': 'No chord data to save.'}), 400
+
+    con = _get_db()
+    con.execute('''
+        INSERT INTO chord_versions
+            (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, 'live-capture', ?, 1)
+    ''', (video_id, title, key_val, round(float(bpm_val), 1),
+          json.dumps(chords_data), json.dumps(beat_times_data),
+          int(time.time())))
+    con.execute('''
+        UPDATE chord_versions SET is_active = 0
+        WHERE video_id = ? AND source != 'live-capture'
+        AND version_id != last_insert_rowid()
+    ''', (video_id,))
+    con.commit()
+    version_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
+    con.close()
+
+    return jsonify({'versionId': version_id, 'saved': True})
 
 
 @app.route('/api/health')
@@ -1365,22 +1751,23 @@ def get_saved_lab(name):
         # Fall back to fuzzy DB lookup
         stem_lower = stem.replace('_', ' ').lower()
         stem_words = [w for w in stem_lower.split() if len(w) > 2]
-        con = sqlite3.connect(DB_PATH)
-        con.row_factory = sqlite3.Row
+        con = _get_db()
         best_match = None
         best_score = 0
+        _fuzzy_cols = ['video_id', 'title', 'key', 'bpm', 'beat_times']
         if stem_words:
             rows = con.execute(
                 'SELECT video_id, title, key, bpm, beat_times FROM chord_versions '
                 'WHERE is_active = 1 ORDER BY version_id DESC'
             ).fetchall()
             for r in rows:
-                title_lower = (r['title'] or '').lower()
+                rd = _row_to_dict(r, _fuzzy_cols)
+                title_lower = (rd['title'] or '').lower()
                 matches = sum(1 for w in stem_words if w in title_lower)
                 score = matches / len(stem_words)
                 if score > best_score and score >= 0.5:
                     best_score = score
-                    best_match = r
+                    best_match = rd
             if best_match:
                 bpm = best_match['bpm']
                 key = best_match['key']
@@ -1464,17 +1851,16 @@ def update_saved_lab(name):
     if not video_id:
         # Try to find a matching video by fuzzy title match on the filename stem
         stem = safe[:-4].replace('_', ' ').lower()
-        con = sqlite3.connect(DB_PATH)
-        con.row_factory = sqlite3.Row
+        con = _get_db()
         rows = con.execute('SELECT video_id, title FROM chord_versions GROUP BY video_id').fetchall()
         con.close()
         for r in rows:
-            title_lower = (r['title'] or '').lower()
-            # Check if enough words from the stem appear in the title
+            rd = _row_to_dict(r, ['video_id', 'title'])
+            title_lower = (rd['title'] or '').lower()
             stem_words = [w for w in stem.split() if len(w) > 2]
             matches = sum(1 for w in stem_words if w in title_lower)
             if stem_words and matches >= len(stem_words) * 0.5:
-                video_id = r['video_id']
+                video_id = rd['video_id']
                 break
 
     if video_id:
@@ -1500,21 +1886,20 @@ def update_saved_lab(name):
                 'end': round(float(seg['end']), 3),
             })
 
-        con = sqlite3.connect(DB_PATH)
-        con.row_factory = sqlite3.Row
+        con = _get_db()
         existing = con.execute(
             'SELECT beat_times, key, bpm, title FROM chord_versions WHERE video_id = ? ORDER BY version_id DESC LIMIT 1',
             (video_id,)
         ).fetchone()
         if existing:
+            ed = _row_to_dict(existing, ['beat_times', 'key', 'bpm', 'title'])
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
             con.execute(
                 'INSERT INTO chord_versions (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (video_id, existing['title'], existing['key'], existing['bpm'],
-                 json.dumps(simple_chords), existing['beat_times'], 'user-edited', now, 1)
+                (video_id, ed['title'], ed['key'], ed['bpm'],
+                 json.dumps(simple_chords), ed['beat_times'], 'user-edited', now, 1)
             )
-            # Mark older versions inactive
             new_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
             con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ? AND version_id != ?', (video_id, new_id))
             con.commit()
@@ -1610,6 +1995,9 @@ def ingest_youtube():
                 'quiet': True,
                 'no_warnings': True,
             }
+            cf = _ytdlp_cookiefile()
+            if cf:
+                ydl_opts['cookiefile'] = cf
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(yt_url, download=True)
                 yt_title = info.get('title', video_id)
@@ -1763,7 +2151,7 @@ def ingest_save(job_id):
 
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
-    con = sqlite3.connect(DB_PATH)
+    con = _get_db()
     con.execute(
         'UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,)
     )
@@ -1824,7 +2212,7 @@ def ingest_save_version(job_id):
         })
 
     # Insert as new version (don't delete old ones — keep history)
-    con = sqlite3.connect(DB_PATH)
+    con = _get_db()
     # Deactivate previous versions
     con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
     con.execute('''
@@ -1860,8 +2248,8 @@ def list_versions(video_id):
 
 
 def _list_versions(video_id):
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
+    con = _get_db()
+    _ver_cols = ['version_id', 'key', 'bpm', 'analyzed_at', 'is_active', 'chords', 'source']
     rows = con.execute(
         '''SELECT version_id, key, bpm, analyzed_at, is_active, chords, source
            FROM chord_versions WHERE video_id = ?
@@ -1872,15 +2260,16 @@ def _list_versions(video_id):
 
     versions = []
     for r in rows:
-        chords = json.loads(r['chords'])
+        d = _row_to_dict(r, _ver_cols)
+        chords = json.loads(d['chords']) if isinstance(d['chords'], str) else d['chords']
         versions.append({
-            'versionId': r['version_id'],
-            'key': r['key'],
-            'bpm': r['bpm'],
-            'analyzedAt': r['analyzed_at'],
-            'isActive': bool(r['is_active']),
+            'versionId': d['version_id'],
+            'key': d['key'],
+            'bpm': d['bpm'],
+            'analyzedAt': d['analyzed_at'],
+            'isActive': bool(d['is_active']),
             'segmentCount': len(chords),
-            'source': r['source'],
+            'source': d['source'],
         })
     return jsonify({'versions': versions})
 
@@ -1888,8 +2277,7 @@ def _list_versions(video_id):
 @app.route('/api/version/<int:version_id>')
 def get_version(version_id):
     """Load a specific version by version_id."""
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
+    con = _get_db()
     row = con.execute(
         'SELECT * FROM chord_versions WHERE version_id = ?',
         (version_id,),
@@ -1900,43 +2288,6 @@ def get_version(version_id):
         return jsonify({'error': 'Version not found.'}), 404
 
     return jsonify(_version_row_to_dict(row))
-
-
-# ── Rating endpoint ────────────────────────────────────────
-@app.route('/api/rate', methods=['POST'])
-def rate_version():
-    """Submit a 1-5 star rating for a chord version."""
-    data = request.get_json(force=True)
-    version_id = data.get('versionId')
-    video_id = data.get('videoId')
-    stars = data.get('stars')
-
-    if not version_id or not video_id or stars not in (1, 2, 3, 4, 5):
-        return jsonify({'error': 'versionId, videoId, and stars (1-5) required.'}), 400
-
-    con = sqlite3.connect(DB_PATH)
-    # Upsert: one rating per version
-    existing = con.execute(
-        'SELECT id FROM ratings WHERE version_id = ?', (version_id,)
-    ).fetchone()
-    if existing:
-        con.execute('UPDATE ratings SET stars = ?, created_at = ? WHERE version_id = ?',
-                     (stars, int(time.time()), version_id))
-    else:
-        con.execute('INSERT INTO ratings (version_id, video_id, stars, created_at) VALUES (?, ?, ?, ?)',
-                     (version_id, video_id, stars, int(time.time())))
-    con.commit()
-    con.close()
-    return jsonify({'ok': True, 'stars': stars})
-
-
-@app.route('/api/rating/<int:version_id>')
-def get_rating(version_id):
-    """Get the rating for a version."""
-    con = sqlite3.connect(DB_PATH)
-    row = con.execute('SELECT stars FROM ratings WHERE version_id = ?', (version_id,)).fetchone()
-    con.close()
-    return jsonify({'stars': row[0] if row else 0})
 
 
 # ── Promote a version to verified (human-checked) ─────────────────
@@ -2022,7 +2373,7 @@ def promote_to_verified(job_id):
                 'end': round(float(seg['end']), 3),
             })
 
-    con = sqlite3.connect(DB_PATH)
+    con = _get_db()
     con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = 'verified'", (video_id,))
     con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
     con.execute('''

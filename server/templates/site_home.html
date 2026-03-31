@@ -33,12 +33,28 @@
       background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
       border-bottom: 1px solid var(--border);
     }
-    .logo {
+    /* Logo = 1.5556em × wordmark (56px at 2.25rem title — same ratio as extension) */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.43em;
+      margin-bottom: 12px;
       font-size: clamp(1.75rem, 4vw, 2.25rem);
+    }
+    .brand-logo {
+      width: 1.5556em;
+      height: 1.5556em;
+      flex-shrink: 0;
+      border-radius: 0.214em;
+      object-fit: contain;
+      display: block;
+    }
+    .logo {
+      font-size: 1em;
       font-weight: 800;
       letter-spacing: -0.5px;
       color: #fff;
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
     .tagline {
       font-size: 1.15rem;
@@ -104,15 +120,6 @@
       color: #fff;
     }
     .card p { color: var(--muted); font-size: 0.95rem; }
-    .note {
-      margin-top: 20px;
-      padding: 14px 18px;
-      background: rgba(108, 71, 255, 0.08);
-      border: 1px solid rgba(108, 71, 255, 0.25);
-      border-radius: var(--radius);
-      font-size: 0.9rem;
-      color: var(--muted);
-    }
     footer {
       border-top: 1px solid var(--border);
       padding: 28px 0 40px;
@@ -121,12 +128,38 @@
     }
     footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
     footer nav { display: flex; gap: 20px; }
+    .promo-section {
+      margin-bottom: 40px;
+    }
+    .promo-shot {
+      margin: 0;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+      background: #0a0a18;
+    }
+    .promo-shot img {
+      width: 100%;
+      height: auto;
+      display: block;
+      vertical-align: middle;
+    }
+    .promo-caption {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: var(--muted);
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap">
-      <p class="logo">SeeChords</p>
+      <div class="brand">
+        <img class="brand-logo" src="{{ url_for('static', filename='icon128.png') }}" alt="SeeChords" width="128" height="128" />
+        <p class="logo">SeeChords</p>
+      </div>
       <p class="tagline">
         Learn guitar on YouTube with real-time chord diagrams—names, fingerings, and a beat-synced strip that follows the video.
       </p>
@@ -141,16 +174,23 @@
         {% endif %}
         <a class="btn btn-secondary" href="/privacy">Privacy policy</a>
       </div>
-      {% if not chrome_store_url %}
-      <p class="note">
-        The extension can be installed from the Chrome Web Store when the listing is live. Until then, use <strong>Load unpacked</strong> in <code>chrome://extensions</code> and select the <code>extension</code> folder from this project.
-        Set <code>SEECHORDS_CHROME_STORE_URL</code> on Fly when your store URL is ready.
-      </p>
-      {% endif %}
     </div>
   </header>
   <main>
     <div class="wrap">
+      <section class="promo-section" aria-label="Extension preview">
+        <figure class="promo-shot">
+          <img
+            src="{{ url_for('static', filename='seechords-promo.png') }}"
+            width="3022"
+            height="1680"
+            alt="SeeChords extension on YouTube: chord strip with beat blocks, chord diagrams, and controls below the video player."
+            loading="lazy"
+            decoding="async"
+          />
+        </figure>
+        <p class="promo-caption">Chord strip, diagrams, and controls—synced to playback.</p>
+      </section>
       <h2>What you get</h2>
       <div class="grid">
         <div class="card">

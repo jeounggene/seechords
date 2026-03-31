@@ -1,0 +1,27 @@
+# Lightweight API server: Flask + Turso client only.
+# No ML libraries -- chord analysis is delegated to ephemeral worker machines.
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy server code (no ML models needed)
+COPY server/ /app/
+
+# Training tools needed for /api/align endpoint
+COPY training/tools /app/training/tools
+
+ENV FLASK_ENV=production
+
+RUN mkdir -p /tmp/uploads
+
+EXPOSE 8080
+
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--timeout", "120", "--workers", "2"]

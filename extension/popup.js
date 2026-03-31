@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       msgEl.textContent = `✓ Chords available! Key: ${response.data.key || '?'}, BPM: ${response.data.bpm || '?'}`;
       msgEl.classList.add('success');
     } else {
-      msgEl.textContent = 'No chords yet. Use the overlay on the video page to upload matching audio.';
+      msgEl.textContent = 'No chords yet. On the video page, open the SeeChords overlay and tap “Analyze this video”.';
       msgEl.classList.add('error');
     }
   });

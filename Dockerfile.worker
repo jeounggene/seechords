@@ -1,0 +1,62 @@
+# Worker image: PyTorch + BTC + Beat This! + yt-dlp for heavy chord analysis.
+# Runs as an ephemeral Fly Machine (auto_destroy: true).
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV DENO_DIR=/root/.deno
+ENV PATH="/root/.deno/bin:${PATH}"
+
+WORKDIR /app
+
+# Install Python dependencies (ML-heavy)
+RUN pip install --no-cache-dir \
+    librosa>=0.10.0 \
+    numpy>=1.21.0 \
+    scipy>=1.7.0 \
+    libsql-experimental>=0.0.55 \
+    einops \
+    soxr \
+    rotary-embedding-torch
+# YouTube changes often — keep yt-dlp current for extractor fixes
+RUN pip install --no-cache-dir -U yt-dlp
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir https://github.com/CPJKU/beat_this/archive/main.zip
+
+# Copy analysis code + BTC model source
+COPY server/analyze_chords.py /app/
+COPY server/worker.py /app/
+COPY server/btc_model/ /app/btc_model/
+COPY training/v2 /app/training/v2
+COPY training/shared /app/training/shared
+COPY training/models/chord_transformer_crf_freeze5.pt /app/training/models/chord_transformer_crf_freeze5.pt
+
+ENV PYTHONPATH=/app/training
+ENV SEECHORDS_MODEL_DIR=/app/training/models
+ENV USE_BTC=1
+ENV USE_FREEZE5=1
+ENV USE_BEAT_THIS=1
+
+# Pre-download BTC checkpoint
+RUN python -c "\
+import urllib.request, os; \
+os.makedirs('/app/btc_model', exist_ok=True); \
+url = 'https://github.com/ptnghia-j/ChordMini/raw/main/checkpoints/btc_model_best.pth'; \
+urllib.request.urlretrieve(url, '/app/btc_model/btc_model_best.pth'); \
+print('Downloaded BTC checkpoint')"
+
+# Pre-download Beat This! checkpoint
+RUN python -c "\
+import torch; \
+torch.hub.load_state_dict_from_url( \
+    'https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/small0.ckpt', \
+    file_name='beat_this-small0.ckpt', map_location='cpu'); \
+print('Cached beat_this small0 checkpoint')"
+
+CMD ["python", "worker.py"]
