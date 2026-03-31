@@ -14,8 +14,7 @@ primary_region = 'sjc'
   DB_PATH = '/data/seechords.db'
   FLASK_ENV = 'production'
   UPLOAD_DIR = '/data/uploads'
-  # Tip jar: set SEECHORDS_DONATION_URL to your Buy Me a Coffee (or Ko-fi) page URL.
-  # SEECHORDS_CHROME_STORE_URL = "..."  # only if the default in app.py changes
+  # Optional: SEECHORDS_DONATION_URL / SEECHORDS_CHROME_STORE_URL override defaults in app.py
 
 [[mounts]]
   source = 'seechords_data'
@@ -24,7 +23,7 @@ primary_region = 'sjc'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'stop'
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 0
 

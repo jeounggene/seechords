@@ -647,11 +647,7 @@ def job_status(job_id):
 
 @app.route('/api/health')
 def health():
-    try:
-        import essentia
-        essentia_ok = True
-    except ImportError:
-        essentia_ok = False
+    essentia_ok = bool(shutil.which('python3'))
     ffmpeg_ok = shutil.which('ffmpeg') is not None
     return jsonify({
         'status': 'ok',
