@@ -16,12 +16,12 @@ import sys
 import os
 import json
 import numpy as np
-from essentia.standard import (
-    MonoLoader, RhythmExtractor2013,
-    HPCP, Key,
-    FrameGenerator, Windowing, Spectrum, SpectralPeaks,
-    Flatness, HighPass, EqualLoudness,
-)
+
+
+def _essentia():
+    """Lazy-load Essentia to avoid importing TensorFlow on the BTC path."""
+    import essentia.standard as es
+    return es
 
 FRAME_SIZE = 8192   # Larger frame for better low-frequency resolution
 HOP_SIZE   = 2048
@@ -745,36 +745,124 @@ def _gate_leading_silence_beats(audio_eq, beat_times, chord_labels, sr, rel_frac
     return out
 
 
-def analyze(audio_path):
-    audio = MonoLoader(filename=audio_path, sampleRate=SR)()
+def _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
+                            skip_silence_gate=False):
+    """Shared post-processing: silence gate, smoothing, merge segments."""
+    if not skip_silence_gate and \
+       os.environ.get('SILENCE_GATE', '1').lower() not in ('0', 'false', 'no'):
+        try:
+            import librosa
+            y_gate, _sr = librosa.load(audio_path, sr=SR, mono=True)
+            try:
+                rel = float(os.environ.get('SILENCE_GATE_FRAC', '0.08'))
+            except ValueError:
+                rel = 0.08
+            final_path = _gate_leading_silence_beats(
+                y_gate, beat_times, final_path, SR, rel_frac=rel)
+        except Exception:
+            pass
 
-    # ── Pre-processing: equal loudness + high-pass to remove bass drum ──
-    audio_eq = EqualLoudness(sampleRate=SR)(audio)
-    audio = HighPass(cutoffFrequency=100, sampleRate=SR)(audio_eq)
+    # Remove isolated single-beat chords surrounded by the same chord
+    if len(final_path) >= 3:
+        smoothed = list(final_path)
+        for i in range(1, len(smoothed) - 1):
+            if smoothed[i - 1] == smoothed[i + 1] and smoothed[i] != smoothed[i - 1]:
+                smoothed[i] = smoothed[i - 1]
+        final_path = smoothed
+
+    # Merge consecutive identical chords into timed segments
+    merged = []
+    for i, chord_name in enumerate(final_path):
+        start = beat_times[i]
+        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + 0.5
+        if merged and merged[-1]['chord'] == chord_name:
+            merged[-1]['end'] = round(end, 3)
+        else:
+            merged.append({'chord': chord_name, 'start': round(start, 3), 'end': round(end, 3)})
+
+    return {
+        'chords':     merged,
+        'bpm':        round(float(bpm), 1),
+        'key':        key_str,
+        'beat_times': [round(b, 3) for b in beat_times],
+    }
+
+
+def _estimate_key_from_chroma(beat_chroma_cols):
+    """Estimate key from beat-level chroma using profile correlation (no Essentia)."""
+    profile_major = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
+                              2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+    profile_minor = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
+                              2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+    avg_chroma = np.mean(beat_chroma_cols, axis=1)
+    if np.max(avg_chroma) < 1e-8:
+        return 'C', 0
+    best_score, best_key, best_scale = -1, 0, 'major'
+    for shift in range(12):
+        rolled = np.roll(avg_chroma, -shift)
+        corr_maj = float(np.corrcoef(rolled, profile_major)[0, 1])
+        corr_min = float(np.corrcoef(rolled, profile_minor)[0, 1])
+        if corr_maj > best_score:
+            best_score, best_key, best_scale = corr_maj, shift, 'major'
+        if corr_min > best_score:
+            best_score, best_key, best_scale = corr_min, shift, 'minor'
+    key_str = NOTES[best_key] if best_scale == 'major' else NOTES[best_key] + 'm'
+    return key_str, best_key
+
+
+def analyze(audio_path):
+    # ── Fast path: Beat This! + BTC (no Essentia needed) ──
+    use_btc = os.environ.get('USE_BTC', '1').lower() not in ('0', 'false', 'no')
+    use_beat_this = os.environ.get('USE_BEAT_THIS', '1').lower() not in ('0', 'false', 'no')
+    btc_result = None
+
+    if use_btc and use_beat_this and os.path.isfile(_btc_checkpoint_path()):
+        try:
+            beat_times, _downbeats = _detect_beats_beat_this(audio_path)
+            if len(beat_times) >= 2:
+                bpm = 60.0 / np.median(np.diff(beat_times))
+            else:
+                bpm = 120.0
+            btc_chords = _btc_decode_chords(audio_path, beat_times)
+            if btc_chords is not None and len(btc_chords) == len(beat_times):
+                import librosa
+                y_key, _ = librosa.load(audio_path, sr=22050, mono=True)
+                chroma = librosa.feature.chroma_cqt(y=y_key, sr=22050)
+                key_str, _ = _estimate_key_from_chroma(chroma)
+                btc_result = _postprocess_and_format(
+                    btc_chords, beat_times, bpm, key_str, audio_path)
+        except Exception:
+            btc_result = None
+
+    if btc_result is not None:
+        return btc_result
+
+    # ── Full path: Essentia (lazy-loaded) for HPCP/key/beats/fallback models ──
+    es = _essentia()
+
+    audio = es.MonoLoader(filename=audio_path, sampleRate=SR)()
+    audio_eq = es.EqualLoudness(sampleRate=SR)(audio)
+    audio = es.HighPass(cutoffFrequency=100, sampleRate=SR)(audio_eq)
 
     # ── Beat tracking ──
-    use_beat_this = os.environ.get('USE_BEAT_THIS', '1').lower() not in ('0', 'false', 'no')
     beat_times = None
-    downbeat_times = None
 
     if use_beat_this:
         try:
-            beat_times, downbeat_times = _detect_beats_beat_this(audio_path)
+            beat_times, _downbeats = _detect_beats_beat_this(audio_path)
             if len(beat_times) >= 2:
-                intervals = np.diff(beat_times)
-                bpm = 60.0 / np.median(intervals)
+                bpm = 60.0 / np.median(np.diff(beat_times))
             else:
                 bpm = 120.0
         except Exception:
             beat_times = None
 
     if beat_times is None:
-        audio_raw = MonoLoader(filename=audio_path, sampleRate=SR)()
-        rhythm = RhythmExtractor2013(method='multifeature')
+        audio_raw = es.MonoLoader(filename=audio_path, sampleRate=SR)()
+        rhythm = es.RhythmExtractor2013(method='multifeature')
         bpm, beats, beats_confidence, _, beats_intervals = rhythm(audio_raw)
         beat_times = beats.tolist()
 
-        # Onset-based beat trackers place beats slightly before the perceived impact.
         try:
             beat_offset = float(os.environ.get('BEAT_OFFSET_MS', '50')) / 1000.0
         except ValueError:
@@ -782,7 +870,6 @@ def analyze(audio_path):
         if beat_offset != 0:
             beat_times = [max(0.0, t + beat_offset) for t in beat_times]
 
-        # Filter out beats that are too close together (< 0.15s)
         if len(beat_times) > 1:
             filtered = [beat_times[0]]
             for bt in beat_times[1:]:
@@ -791,44 +878,41 @@ def analyze(audio_path):
             beat_times = filtered
 
     # ── Compute 12-bin HPCP per frame + spectral flatness ──
-    windowing = Windowing(type='blackmanharris62', size=FRAME_SIZE)
-    spectrum_algo = Spectrum(size=FRAME_SIZE)
-    peaks = SpectralPeaks(
+    windowing = es.Windowing(type='blackmanharris62', size=FRAME_SIZE)
+    spectrum_algo = es.Spectrum(size=FRAME_SIZE)
+    peaks = es.SpectralPeaks(
         orderBy='magnitude',
-        magnitudeThreshold=0.0001,   # Higher threshold to reject noise
-        maxPeaks=40,                 # Fewer peaks = less noise
-        minFrequency=80,             # Above bass drum fundamentals
-        maxFrequency=4000,           # Below cymbal noise
+        magnitudeThreshold=0.0001,
+        maxPeaks=40,
+        minFrequency=80,
+        maxFrequency=4000,
         sampleRate=SR,
     )
-    hpcp_algo = HPCP(
+    hpcp_algo = es.HPCP(
         size=12,
         referenceFrequency=440,
-        harmonics=4,                 # Reduced from 8 — less pitch bleeding
+        harmonics=4,
         bandPreset=False,
         minFrequency=80,
         maxFrequency=4000,
         weightType='cosine',
         nonLinear=True,
-        windowSize=1.0,              # Must be >= 12/size (=1.0 for 12 bins)
+        windowSize=1.0,
         sampleRate=SR,
     )
-    flatness_algo = Flatness()
+    flatness_algo = es.Flatness()
 
     hpcps_12 = []
-    hpcps_native = []  # A-referenced (native Essentia) for Key detection
-    flatness_weights = []  # 1.0 = tonal, 0.0 = percussive
-    for frame in FrameGenerator(audio, frameSize=FRAME_SIZE, hopSize=HOP_SIZE,
-                                startFromZero=True):
+    hpcps_native = []
+    flatness_weights = []
+    for frame in es.FrameGenerator(audio, frameSize=FRAME_SIZE, hopSize=HOP_SIZE,
+                                   startFromZero=True):
         spec = spectrum_algo(windowing(frame))
         freqs, mags = peaks(spec)
         h = hpcp_algo(freqs, mags)
         hpcps_native.append(h)
-        # Essentia HPCP bin 0 = A (ref 440Hz). Rotate so bin 0 = C.
         hpcps_12.append(np.roll(h, -3))
-        # Spectral flatness: low = tonal (good), high = noise/percussive (bad)
         sf = flatness_algo(spec)
-        # Convert: tonal frames get weight ~1.0, percussive frames get ~0.2
         w = max(0.2, 1.0 - sf * 2.0)
         flatness_weights.append(w)
 
@@ -836,16 +920,14 @@ def analyze(audio_path):
     flatness_weights = np.array(flatness_weights)
     n_frames = len(hpcps_12)
 
-    # ── Temporal smoothing of HPCP ──
     hpcps_12 = _smooth_hpcp(hpcps_12, window=5)
 
     # ── Key detection (uses native A-referenced HPCP) ──
     avg_hpcp_native = np.mean(np.array(hpcps_native), axis=0)
-    key_algo = Key(profileType='bgate')
+    key_algo = es.Key(profileType='bgate')
     key_name, scale, key_strength, _ = key_algo(avg_hpcp_native)
     key_str = key_name if scale == 'major' else key_name + 'm'
 
-    # Map key name to NOTES index
     _ENHARMONIC_TO_SHARP = {
         'Db': 'C#', 'Eb': 'D#', 'Gb': 'F#', 'Ab': 'G#', 'Bb': 'A#',
     }
@@ -853,19 +935,14 @@ def analyze(audio_path):
     sharp_notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
     key_idx = sharp_notes.index(kn) if kn in sharp_notes else 0
     if scale == 'minor':
-        key_idx = (key_idx + 3) % 12  # relative major
+        key_idx = (key_idx + 3) % 12
 
     diatonic = _diatonic_set(key_idx)
     sec_doms = _secondary_dominants(key_idx)
 
-    # ── Beat-synchronise HPCP (weighted by tonal-ness) ──
+    # ── Beat-synchronise HPCP ──
     beat_frames = [int(round(bt * SR / HOP_SIZE)) for bt in beat_times]
     beat_chroma = _sync_hpcp_to_beats(hpcps_12, beat_frames, n_frames, flatness_weights)
-
-    # Recurrence smoothing disabled — it tends to homogenise chroma toward
-    # the dominant chord (e.g. tonic C absorbs Am/F beats in pop songs).
-    # Raw beat-level chroma gives the classifier more discriminative features.
-    # beat_chroma = _recurrence_smooth(beat_chroma)
 
     if beat_chroma.shape[1] == 0:
         return {
@@ -873,8 +950,7 @@ def analyze(audio_path):
             'key': key_str, 'beat_times': [],
         }
 
-    # ── Try BTC, then Transformer+CRF freeze5, then template fallback ──
-    use_btc = os.environ.get('USE_BTC', '1').lower() not in ('0', 'false', 'no')
+    # ── Try BTC, then freeze5, then template fallback ──
     use_freeze5 = os.environ.get('USE_FREEZE5', '1').lower() not in ('0', 'false', 'no')
     final_path = None
 
@@ -896,8 +972,8 @@ def analyze(audio_path):
 
     if final_path is None:
         # ── Template fallback: hand-crafted templates + diatonic bias ──
-            KEY_BOOST = 1.0              # Strong diatonic preference
-            SEC_DOM_BOOST = 0.3          # Mild boost for secondary dominants
+            KEY_BOOST = 1.0
+            SEC_DOM_BOOST = 0.3
             simple_bias = np.zeros((len(SIMPLE_CHORDS), 1))
             for ci, name in enumerate(SIMPLE_CHORDS):
                 if name in diatonic:
@@ -910,7 +986,6 @@ def analyze(audio_path):
                 self_prob=0.95, emission_bias=simple_bias,
             )
 
-            # Promote to extended chords where evidence is strong
             PROMOTE_THRESH = 0.15
             norms = np.linalg.norm(beat_chroma, axis=0, keepdims=True)
             norms[norms == 0] = 1.0
@@ -930,8 +1005,7 @@ def analyze(audio_path):
                             best_ext_score = ext_score
                 final_path.append(best_ext_name)
 
-    # ── Leading silence: force N until RMS reaches a fraction of peak (model often
-    #    labels beats before audible onset; only affects beats from the start).
+    # Leading silence gate (uses equal-loudness audio from Essentia path)
     if os.environ.get('SILENCE_GATE', '1').lower() not in ('0', 'false', 'no'):
         try:
             rel = float(os.environ.get('SILENCE_GATE_FRAC', '0.08'))
@@ -940,31 +1014,8 @@ def analyze(audio_path):
         final_path = _gate_leading_silence_beats(
             audio_eq, beat_times, final_path, SR, rel_frac=rel)
 
-    # ── Post-processing: remove very short chord segments (< 1 beat) ──
-    # Replace isolated single-beat chords surrounded by the same chord
-    if len(final_path) >= 3:
-        smoothed = list(final_path)
-        for i in range(1, len(smoothed) - 1):
-            if smoothed[i - 1] == smoothed[i + 1] and smoothed[i] != smoothed[i - 1]:
-                smoothed[i] = smoothed[i - 1]
-        final_path = smoothed
-
-    # ── Merge consecutive identical chords into timed segments ──
-    merged = []
-    for i, chord_name in enumerate(final_path):
-        start = beat_times[i]
-        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + 0.5
-        if merged and merged[-1]['chord'] == chord_name:
-            merged[-1]['end'] = round(end, 3)
-        else:
-            merged.append({'chord': chord_name, 'start': round(start, 3), 'end': round(end, 3)})
-
-    return {
-        'chords':     merged,
-        'bpm':        round(float(bpm), 1),
-        'key':        key_str,
-        'beat_times': [round(b, 3) for b in beat_times],
-    }
+    return _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
+                                   skip_silence_gate=True)
 
 
 if __name__ == '__main__':
