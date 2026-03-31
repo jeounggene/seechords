@@ -395,33 +395,15 @@ def _viterbi_decode(template_matrix, chord_list, beat_chroma, self_prob=0.92,
     return [chord_list[ci] for ci in path]
 
 
-# Essentia subprocess detection
-# Use ezchords' Python 3.12 venv which has essentia-tensorflow installed
-_VENV312_PYTHON_PATH = os.path.join(os.path.dirname(__file__), '..', '..', 'ezchords', '.venv312', 'bin', 'python')
-_VENV312_PYTHON = _VENV312_PYTHON_PATH if os.path.exists(_VENV312_PYTHON_PATH) else sys.executable
-_ANALYZE_SCRIPT = os.path.join(os.path.dirname(__file__), 'analyze_chords.py')
-
-
-def _detect_chords_essentia(audio_path: str):
-    result = subprocess.run(
-        [_VENV312_PYTHON, _ANALYZE_SCRIPT, audio_path],
-        capture_output=True, text=True, timeout=600,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f'Essentia analysis failed: {result.stderr[-500:]}')
-    data = json.loads(result.stdout)
-    if 'error' in data:
-        raise RuntimeError(data['error'])
-    return data['chords'], data['bpm'], data['key'], data['beat_times']
-
-
 def detect_chords(audio_path: str, hop_size: float = 0.5):
-    # Try Essentia first
-    if os.path.exists(_VENV312_PYTHON) and os.path.exists(_ANALYZE_SCRIPT):
-        try:
-            return _detect_chords_essentia(audio_path)
-        except Exception as e:
-            print(f'[SeeChords] Essentia failed, falling back to librosa: {e}')
+    """Run chord analysis in-process (avoids OOM from subprocess doubling memory)."""
+    try:
+        from analyze_chords import analyze as _analyze_chords
+        data = _analyze_chords(audio_path)
+        return data['chords'], data['bpm'], data['key'], data['beat_times']
+    except Exception as e:
+        print(f'[SeeChords] analyze_chords failed, falling back to librosa: {e}')
+        import traceback; traceback.print_exc()
 
     return _detect_chords_librosa(audio_path, hop_size)
 
@@ -665,7 +647,11 @@ def job_status(job_id):
 
 @app.route('/api/health')
 def health():
-    essentia_ok = os.path.exists(_VENV312_PYTHON)
+    try:
+        import essentia
+        essentia_ok = True
+    except ImportError:
+        essentia_ok = False
     ffmpeg_ok = shutil.which('ffmpeg') is not None
     return jsonify({
         'status': 'ok',
@@ -1274,12 +1260,14 @@ def _do_ingest_audio_only(job_id, audio_path, song_name):
 DEFAULT_CHROME_STORE_URL = (
     'https://chromewebstore.google.com/detail/SeeChords/bkmkkgblbnakckgdehgjaggnmglcljmj'
 )
+# Tip page; override with SEECHORDS_DONATION_URL if you switch platforms.
+DEFAULT_DONATION_URL = 'https://buymeacoffee.com/devjinn'
 
 
 @app.route('/')
 def site_home():
     """Marketing landing page for the SeeChords browser extension."""
-    donation_url = os.environ.get('SEECHORDS_DONATION_URL', '').strip()
+    donation_url = os.environ.get('SEECHORDS_DONATION_URL', DEFAULT_DONATION_URL).strip()
     chrome_store_url = os.environ.get('SEECHORDS_CHROME_STORE_URL', DEFAULT_CHROME_STORE_URL).strip()
     return render_template(
         'site_home.html',
