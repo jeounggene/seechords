@@ -818,7 +818,9 @@ def analyze(audio_path):
 
     if use_btc and use_beat_this and os.path.isfile(_btc_checkpoint_path()):
         try:
+            print('[SeeChords] Fast path: Beat This! + BTC', flush=True)
             beat_times, _downbeats = _detect_beats_beat_this(audio_path)
+            print(f'[SeeChords] Beat This! found {len(beat_times)} beats', flush=True)
             if len(beat_times) >= 2:
                 bpm = 60.0 / np.median(np.diff(beat_times))
             else:
@@ -831,7 +833,12 @@ def analyze(audio_path):
                 key_str, _ = _estimate_key_from_chroma(chroma)
                 btc_result = _postprocess_and_format(
                     btc_chords, beat_times, bpm, key_str, audio_path)
-        except Exception:
+                print(f'[SeeChords] Fast path success: {len(btc_result["chords"])} segments',
+                      flush=True)
+        except Exception as e:
+            import traceback
+            print(f'[SeeChords] Fast path failed: {e}', flush=True)
+            traceback.print_exc()
             btc_result = None
 
     if btc_result is not None:
