@@ -125,6 +125,20 @@
   white-space: nowrap;
 }
 
+.sc-sync-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--sc-bg-input);
+  border: 1px solid var(--sc-border);
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+.sc-sync-label {
+  min-width: 48px;
+  font-size: .82rem;
+}
+
 .sc-toggle-btn {
   background: none;
   border: 1px solid var(--sc-border);
@@ -434,6 +448,16 @@
   z-index: 2;
 }
 .sc-beat-block.sc-active .sc-beat-name { color: #fff; }
+
+.sc-beat-name.sc-beat-n {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--sc-text-muted);
+  opacity: 0.9;
+}
+.sc-beat-block.sc-active .sc-beat-name.sc-beat-n {
+  color: rgba(255, 255, 255, 0.5);
+}
 
 .sc-chord-suffix {
   font-size: .75em;

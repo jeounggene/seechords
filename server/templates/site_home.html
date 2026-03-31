@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SeeChords — guitar chord diagrams synced to YouTube. Learn songs with real-time chord strips and diagrams in your browser.">
+  <title>SeeChords — Chords on YouTube</title>
+  <style>
+    :root {
+      --bg: #080812;
+      --bg-card: #12122a;
+      --border: #2a2a50;
+      --accent: #6c47ff;
+      --accent-hover: #8264ff;
+      --gold: #ffd700;
+      --text: #f0f0f8;
+      --muted: #8888aa;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    a { color: var(--accent-hover); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    header {
+      padding: 28px 0 48px;
+      background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
+      border-bottom: 1px solid var(--border);
+    }
+    .logo {
+      font-size: clamp(1.75rem, 4vw, 2.25rem);
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .tagline {
+      font-size: 1.15rem;
+      color: var(--muted);
+      max-width: 36em;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 28px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover { background: var(--accent-hover); text-decoration: none; }
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); text-decoration: none; }
+    .btn-donate {
+      background: transparent;
+      color: var(--gold);
+      border-color: rgba(255, 215, 0, 0.35);
+    }
+    .btn-donate:hover { background: rgba(255, 215, 0, 0.08); text-decoration: none; }
+    main { padding: 48px 0 64px; }
+    h2 {
+      font-size: 1.35rem;
+      margin-bottom: 20px;
+      color: #fff;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .card h3 {
+      font-size: 1.05rem;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+    .card p { color: var(--muted); font-size: 0.95rem; }
+    .note {
+      margin-top: 20px;
+      padding: 14px 18px;
+      background: rgba(108, 71, 255, 0.08);
+      border: 1px solid rgba(108, 71, 255, 0.25);
+      border-radius: var(--radius);
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 0 40px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
+    footer nav { display: flex; gap: 20px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <p class="logo">SeeChords</p>
+      <p class="tagline">
+        Learn guitar on YouTube with real-time chord diagrams—names, fingerings, and a beat-synced strip that follows the video.
+      </p>
+      <div class="hero-actions">
+        {% if chrome_store_url %}
+        <a class="btn btn-primary" href="{{ chrome_store_url }}" rel="noopener noreferrer" target="_blank">Add to Chrome</a>
+        {% else %}
+        <span class="btn btn-primary" style="opacity: 0.65; cursor: default;">Chrome Web Store</span>
+        {% endif %}
+        {% if donation_url %}
+        <a class="btn btn-donate" href="{{ donation_url }}" rel="noopener noreferrer" target="_blank">Buy me a coffee</a>
+        {% endif %}
+        <a class="btn btn-secondary" href="/privacy">Privacy policy</a>
+      </div>
+      {% if not chrome_store_url %}
+      <p class="note">
+        The extension can be installed from the Chrome Web Store when the listing is live. Until then, use <strong>Load unpacked</strong> in <code>chrome://extensions</code> and select the <code>extension</code> folder from this project.
+        Set <code>SEECHORDS_CHROME_STORE_URL</code> on Fly when your store URL is ready.
+      </p>
+      {% endif %}
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <h2>What you get</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Synced chord strip</h3>
+          <p>Scrolling chord blocks locked to playback—see what to play and when.</p>
+        </div>
+        <div class="card">
+          <h3>Diagrams</h3>
+          <p>SVG guitar chord diagrams for previous, current, and next chords.</p>
+        </div>
+        <div class="card">
+          <h3>Transpose &amp; timing</h3>
+          <p>Shift chords by semitones and nudge sync if the video is slightly off.</p>
+        </div>
+        <div class="card">
+          <h3>Community data</h3>
+          <p>When chords exist for a video, they load instantly. You can contribute by uploading matching audio for analysis—audio is processed and deleted; only chord data is kept.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+  <footer>
+    <div class="wrap">
+      <p>SeeChords extension · API at <a href="https://seechords.fly.dev/api/health">seechords.fly.dev</a></p>
+      <nav>
+        <a href="/privacy">Privacy</a>
+        {% if donation_url %}
+        <a href="{{ donation_url }}" rel="noopener noreferrer" target="_blank">Support the project</a>
+        {% endif %}
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

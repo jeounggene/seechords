@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
-"""Chord & beat analysis using Essentia HPCP + beat-synchronised Viterbi HMM.
+"""Chord & beat analysis pipeline.
 
 Called as a subprocess by app.py (needs Python 3.12 + essentia-tensorflow).
 Reads an audio file path from argv[1], writes JSON to stdout:
   { "chords": [...], "bpm": float, "key": str, "beat_times": [...] }
 
-If a trained model exists at ../training/models/chord_model.pkl, uses it
-for chord classification with learned transitions. Otherwise falls back
-to hand-crafted templates.
+Inference cascade (first success wins):
+  1. BTC transformer (170-class, CQT features) -- primary
+  2. Freeze5 Transformer+CRF (25-class, HPCP features) -- fallback
+  3. Template HMM (hand-crafted chroma templates) -- last resort
 
-Accuracy pipeline:
-  1. High-pass filter removes bass drum / sub-bass from corrupting chroma
-  2. HPCP with 4 harmonics (not 8) avoids pitch-class bleeding
-  3. Spectral-flatness weighting down-weights percussive frames
-  4. Temporal smoothing of HPCP before beat aggregation
-  5. Beat-synced median aggregation
-  6. Viterbi HMM with learned or template-based emission + transition probs
-  7. Post-processing: minimum chord duration filter
+Beat detection: Beat This! transformer (ISMIR 2024) with Essentia fallback.
 """
 import sys
 import os
 import json
-import pickle
 import numpy as np
 from essentia.standard import (
     MonoLoader, RhythmExtractor2013,
@@ -240,64 +233,378 @@ def _sync_hpcp_to_beats(hpcps_12, beat_frames, n_frames, weights=None):
 
 
 # ── Trained model support ────────────────────────────────────
-_MODEL_DIR = os.path.join(os.path.dirname(__file__), '..', 'training', 'models')
-_MODEL_PATH_V1 = os.path.join(_MODEL_DIR, 'chord_model.pkl')
-_MODEL_PATH_V2 = os.path.join(_MODEL_DIR, 'chord_model_v2.pkl')
-_TRAINING_ROOT = os.path.join(os.path.dirname(__file__), '..', 'training')
-_TRAINED_MODEL = None
+def _training_root():
+    """Directory that contains ``v2/`` on ``sys.path`` (repo or Docker layout)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    parent_training = os.path.normpath(os.path.join(here, '..', 'training'))
+    if os.path.isdir(os.path.join(parent_training, 'v2')):
+        return parent_training
+    flat = os.path.join(here, 'training')
+    if os.path.isdir(os.path.join(flat, 'v2')):
+        return flat
+    return parent_training
 
 
-def _load_trained_model():
-    """Load trained model if available. Prefers v2, falls back to v1."""
-    global _TRAINED_MODEL
-    if _TRAINED_MODEL is not None:
-        return _TRAINED_MODEL
-    # Try v2 first, then v1
-    for path in [_MODEL_PATH_V2, _MODEL_PATH_V1]:
-        if os.path.exists(path):
-            try:
-                with open(path, 'rb') as f:
-                    _TRAINED_MODEL = pickle.load(f)
-                return _TRAINED_MODEL
-            except Exception:
-                continue
-    return None
+def _model_dir():
+    override = os.environ.get('SEECHORDS_MODEL_DIR')
+    if override:
+        return override
+    return os.path.normpath(os.path.join(_training_root(), 'models'))
 
 
-def _extract_bass_beat_chroma(audio, beat_frames, n_frames):
-    """Extract bass-register HPCP (50-350 Hz) and sync to beats.
+_MODEL_DIR = _model_dir()
+_TRAINING_ROOT = _training_root()
+
+_FREEZE5_MODEL = None
+_FREEZE5_DEVICE = None
+
+
+def _freeze5_checkpoint_path():
+    return os.environ.get(
+        'FREEZE5_CHECKPOINT',
+        os.path.join(_MODEL_DIR, 'chord_transformer_crf_freeze5.pt'),
+    )
+
+
+def _load_freeze5_crf():
+    """Lazy-load Transformer+CRF freeze5 checkpoint (CPU)."""
+    global _FREEZE5_MODEL, _FREEZE5_DEVICE
+    if _FREEZE5_MODEL is not None:
+        return _FREEZE5_MODEL, _FREEZE5_DEVICE
+    import torch
+    sys.path.insert(0, _TRAINING_ROOT)
+    from v2.transformer_model import ChordTransformerCRF
+
+    path = _freeze5_checkpoint_path()
+    device = torch.device('cpu')
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    hp = ckpt['hyperparams']
+    model = ChordTransformerCRF(
+        input_dim=hp['input_dim'],
+        d_model=hp['d_model'],
+        nhead=hp['nhead'],
+        num_layers=hp['num_layers'],
+        d_ff=hp['d_ff'],
+        dropout=hp['dropout'],
+        crf_self_bias=hp.get('crf_self_bias', 2.0),
+        emission_temp=hp.get('emission_temp', 1.0),
+        emission_dropout=hp.get('emission_dropout', 0.0),
+        emission_noise_std=hp.get('emission_noise_std', 0.0),
+        em_emission_bias=hp.get('em_emission_bias', 0.0),
+        emission_mode=hp.get('emission_mode', 'direct'),
+        n_qualities=hp.get('n_qualities', 3),
+        use_key_aux=hp.get('key_aux_weight', 0.0) > 0.0,
+        key_condition_quality=hp.get('key_condition_quality', False),
+    )
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.to(device)
+    model.eval()
+    _FREEZE5_MODEL = model
+    _FREEZE5_DEVICE = device
+    return model, device
+
+
+def _freeze5_build_features(beat_chroma_cols):
+    """Build 60-dim features from (12, n_beats) beat chroma (matches training feature_dim=60)."""
+    bc = beat_chroma_cols.T.astype(np.float32)  # (n_beats, 12)
+    ctx60 = _build_context_features(beat_chroma_cols, radius=2)  # (n_beats, 60)
+    x48 = ctx60[:, :48]
+    x = np.hstack([bc, x48])  # (n_beats, 60)
+    norms = np.linalg.norm(x, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return (x / norms).astype(np.float32)
+
+
+def _freeze5_get_emissions(model, x_np, device):
+    """Compute CRF emissions from features. Returns (emissions_tensor, softmax_probs_np)."""
+    import torch
+    with torch.no_grad():
+        xt = torch.from_numpy(x_np).unsqueeze(0).to(device)
+        h = model._encode(xt)
+        tier1_logits = model.tier1_head(h)
+        root_logits = model.root_head(h)
+
+        if model.emission_mode == 'hybrid':
+            emissions = model._tier1_emissions_hybrid(root_logits, tier1_logits)
+        else:
+            emissions = model._tier1_emissions_direct(tier1_logits)
+
+        emission_probs = torch.softmax(emissions[0], dim=-1).cpu().numpy()
+    return emissions, emission_probs
+
+
+def _freeze5_viterbi_with_bias(model, emissions, key_bias_logits):
+    """Run CRF Viterbi on emissions + per-class key bias. Returns (path, log_score)."""
+    import torch
+    with torch.no_grad():
+        biased = emissions.clone()
+        if key_bias_logits is not None:
+            biased = biased + key_bias_logits.unsqueeze(0).unsqueeze(0)
+
+        paths = model.crf.decode(biased)
+        path = np.array(paths[0], dtype=np.int64)
+
+        # Viterbi log-score of the best path
+        e = biased[0]
+        crf = model.crf
+        v = crf.start_transitions + e[0]
+        for t in range(1, e.shape[0]):
+            scores = v.unsqueeze(1) + crf.transitions
+            best_scores, _ = scores.max(dim=0)
+            v = best_scores + e[t]
+        v = v + crf.end_transitions
+        log_score = float(v.max())
+
+    return path, log_score
+
+
+def _build_key_bias_logits(key_idx, vocab, bias_strength=0.5):
+    """Build per-class emission bias for a given key hypothesis.
+
+    Diatonic chords get +bias_strength, non-diatonic get 0, N gets 0.
+    """
+    import torch
+    diatonic = _diatonic_set(key_idx)
+    sec_doms = _secondary_dominants(key_idx)
+    bias = torch.zeros(len(vocab))
+    for ci, name in enumerate(vocab):
+        if name == 'N':
+            continue
+        elif name in diatonic:
+            bias[ci] = bias_strength
+        elif name in sec_doms:
+            bias[ci] = bias_strength * 0.3
+    return bias
+
+
+def _freeze5_decode_chords(beat_chroma_cols, key_idx, beat_times):
+    """Full freeze5 inference: 12-key search with diatonic emission bias, long-run breaking.
+
+    Computes CRF emissions once, then tests all 12 key hypotheses by adding
+    a diatonic bias to the emissions before Viterbi decoding. Picks the key
+    with the highest Viterbi score.
 
     Args:
-        audio: pre-loaded audio array (EqualLoudness applied, NO high-pass)
-        beat_frames: list of beat frame indices
-        n_frames: total number of frames
+        beat_chroma_cols: (12, n_beats) column-oriented beat HPCP.
+        key_idx: estimated key index from Essentia (0-11, relative major).
+        beat_times: list of beat times in seconds.
 
     Returns:
-        (12, n_beats) bass beat chroma array
+        (list of chord name strings, best_key_idx)
     """
-    windowing = Windowing(type='blackmanharris62', size=FRAME_SIZE)
-    spectrum_algo = Spectrum(size=FRAME_SIZE)
-    bass_peaks = SpectralPeaks(
-        orderBy='magnitude', magnitudeThreshold=0.0001, maxPeaks=20,
-        minFrequency=50, maxFrequency=350, sampleRate=SR,
-    )
-    bass_hpcp_algo = HPCP(
-        size=12, referenceFrequency=440, harmonics=2,
-        bandPreset=False, minFrequency=50, maxFrequency=350,
-        weightType='cosine', nonLinear=True, windowSize=1.0, sampleRate=SR,
+    import torch
+    sys.path.insert(0, _TRAINING_ROOT)
+    from v2.decode import smooth_isolated
+    from shared.chord_vocab import TIER1_VOCAB as vocab
+
+    model, device = _load_freeze5_crf()
+
+    # Build features and compute emissions once (key-independent)
+    x = _freeze5_build_features(beat_chroma_cols)
+    emissions, emission_probs = _freeze5_get_emissions(model, x, device)
+
+    best_score = -np.inf
+    best_path = None
+    best_key = key_idx
+
+    for ki in range(12):
+        key_bias = _build_key_bias_logits(ki, vocab, bias_strength=0.5).to(device)
+        path, score = _freeze5_viterbi_with_bias(model, emissions, key_bias)
+
+        if score > best_score:
+            best_score = score
+            best_path = path.copy()
+            best_key = ki
+
+    best_path = smooth_isolated(best_path)
+    chord_names = [vocab[int(i)] for i in best_path]
+
+    # Long-run breaking using original emission probabilities
+    if emission_probs is not None and beat_times:
+        chord_names = _break_long_runs(chord_names, emission_probs, vocab,
+                                       beat_times, best_key)
+
+    return chord_names, best_key
+
+
+# ── Beat This! transformer beat tracker (ISMIR 2024) ────────
+_BEAT_THIS_MODEL = None
+
+
+def _detect_beats_beat_this(audio_path):
+    """Detect beats using Beat This! transformer model (ISMIR 2024).
+
+    Returns (beat_times, downbeat_times) as Python lists of float seconds.
+    """
+    global _BEAT_THIS_MODEL
+    if _BEAT_THIS_MODEL is None:
+        from beat_this.inference import File2Beats
+        _BEAT_THIS_MODEL = File2Beats(
+            checkpoint_path="small0", device="cpu", dbn=False)
+    beats, downbeats = _BEAT_THIS_MODEL(audio_path)
+    return beats.tolist(), downbeats.tolist()
+
+
+# ── BTC (pre-trained 170-class model) inference ─────────────
+_BTC_MODEL = None
+_BTC_DEVICE = None
+_BTC_MEAN = None
+_BTC_STD = None
+
+
+def _btc_checkpoint_path():
+    return os.environ.get(
+        'BTC_CHECKPOINT',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     'btc_model', 'btc_model_best.pth'),
     )
 
-    bass_hpcps = []
-    for frame in FrameGenerator(audio, frameSize=FRAME_SIZE, hopSize=HOP_SIZE,
-                                startFromZero=True):
-        spec = spectrum_algo(windowing(frame))
-        freqs, mags = bass_peaks(spec)
-        h = bass_hpcp_algo(freqs, mags)
-        bass_hpcps.append(np.roll(h, -3))  # A-ref → C-ref
 
-    bass_hpcps = np.array(bass_hpcps)
-    bass_hpcps = _smooth_hpcp(bass_hpcps, window=5)
-    return _sync_hpcp_to_beats(bass_hpcps, beat_frames, len(bass_hpcps))
+def _load_btc_model():
+    """Lazy-load BTC model checkpoint (CPU)."""
+    global _BTC_MODEL, _BTC_DEVICE, _BTC_MEAN, _BTC_STD
+    if _BTC_MODEL is not None:
+        return _BTC_MODEL, _BTC_DEVICE, _BTC_MEAN, _BTC_STD
+    import torch
+    from btc_model.btc_model import BTC_model
+
+    path = _btc_checkpoint_path()
+    device = torch.device('cpu')
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+
+    # Handle both checkpoint formats (large_voca vs best)
+    if 'model' in ckpt:
+        state_dict = ckpt['model']
+    elif 'model_state_dict' in ckpt:
+        state_dict = ckpt['model_state_dict']
+    else:
+        state_dict = ckpt
+
+    norm = ckpt.get('normalization', {})
+    if isinstance(norm, dict) and 'mean' in norm:
+        _BTC_MEAN = float(norm['mean'])
+        _BTC_STD = float(norm['std'])
+    else:
+        mean_val = ckpt.get('mean')
+        std_val = ckpt.get('std')
+        _BTC_MEAN = float(mean_val) if mean_val is not None else -2.37
+        _BTC_STD = float(std_val) if std_val is not None else 1.96
+
+    model = BTC_model()
+    model.load_state_dict(state_dict)
+    model.to(device)
+    model.eval()
+    _BTC_MODEL = model
+    _BTC_DEVICE = device
+    return model, device, _BTC_MEAN, _BTC_STD
+
+
+def _extract_cqt(audio_path, sr=22050, hop_length=2048, n_bins=144,
+                 bins_per_octave=24):
+    """Extract CQT spectrogram using librosa (log-magnitude, matching ChordMini).
+
+    Returns (n_frames, 144) float32 array.
+    """
+    import librosa
+    y, _ = librosa.load(audio_path, sr=sr)
+    cqt = librosa.cqt(y, sr=sr, hop_length=hop_length,
+                       n_bins=n_bins, bins_per_octave=bins_per_octave,
+                       fmin=librosa.note_to_hz('C1'))
+    return np.log(np.abs(cqt) + 1e-6).T.astype(np.float32)
+
+
+def _btc_decode_chords(audio_path, beat_times):
+    """Run BTC model on CQT features, sync to beat times.
+
+    Args:
+        audio_path: path to audio file
+        beat_times: list of beat times in seconds (from Essentia)
+
+    Returns:
+        list of chord name strings (one per beat), or None on failure
+    """
+    import torch
+    from btc_model.vocab import btc_idx_to_display
+
+    model, device, mean, std = _load_btc_model()
+
+    # Extract CQT and normalize
+    cqt = _extract_cqt(audio_path)
+    cqt = (cqt - mean) / max(std, 1e-6)
+
+    n_frames = cqt.shape[0]
+    if n_frames == 0:
+        return None
+
+    seq_len = 108
+    stride = 54  # 50% overlap for better predictions at chunk boundaries
+
+    # Accumulate logits with overlap averaging
+    logit_sum = np.zeros((n_frames, 170), dtype=np.float32)
+    logit_count = np.zeros(n_frames, dtype=np.float32)
+
+    with torch.no_grad():
+        pos = 0
+        while pos < n_frames:
+            end = min(pos + seq_len, n_frames)
+            chunk = cqt[pos:end]
+            actual_len = chunk.shape[0]
+
+            if actual_len < seq_len:
+                pad = np.zeros((seq_len - actual_len, 144), dtype=np.float32)
+                chunk = np.concatenate([chunk, pad], axis=0)
+
+            x = torch.from_numpy(chunk).unsqueeze(0).to(device)
+            out = model(x)  # (1, seq_len, 170)
+            logits = out[0, :actual_len].cpu().numpy()
+
+            logit_sum[pos:pos + actual_len] += logits
+            logit_count[pos:pos + actual_len] += 1.0
+
+            pos += stride
+            if pos >= n_frames:
+                break
+
+    # Average overlapping logits
+    logit_count[logit_count == 0] = 1.0
+    avg_logits = logit_sum / logit_count[:, np.newaxis]
+
+    # Frame-level predictions
+    frame_preds = avg_logits.argmax(axis=1)
+
+    # Temporal smoothing: replace isolated single-frame predictions
+    if len(frame_preds) >= 3:
+        smoothed = frame_preds.copy()
+        for i in range(1, len(smoothed) - 1):
+            if smoothed[i - 1] == smoothed[i + 1] and smoothed[i] != smoothed[i - 1]:
+                smoothed[i] = smoothed[i - 1]
+        frame_preds = smoothed
+
+    # Sync frame-level predictions to beat times via majority vote
+    hop_dur = 2048 / 22050.0  # ~0.093s per CQT frame
+    beat_chords = []
+    for bi in range(len(beat_times)):
+        t_start = beat_times[bi]
+        t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
+        f_start = max(0, int(round(t_start / hop_dur)))
+        f_end = min(n_frames, int(round(t_end / hop_dur)))
+        if f_end <= f_start:
+            f_end = f_start + 1
+        if f_start >= n_frames:
+            beat_chords.append('N')
+            continue
+        f_end = min(f_end, n_frames)
+        segment = frame_preds[f_start:f_end]
+        if len(segment) == 0:
+            beat_chords.append('N')
+            continue
+        # Majority vote
+        counts = np.bincount(segment, minlength=170)
+        winner = int(counts.argmax())
+        beat_chords.append(btc_idx_to_display(winner))
+
+    return beat_chords
+
 
 
 def _build_context_features(beat_chroma_cols, radius=1):
@@ -319,185 +626,6 @@ def _build_context_features(beat_chroma_cols, radius=1):
     return X
 
 
-def _model_viterbi_decode_v2(model, beat_chroma_cols, key_idx, decode_mode='direct',
-                             bass_beat_chroma=None):
-    """Decode chords using v2 model with configurable decode strategy.
-
-    Args:
-        model: v2 model dict (version=2)
-        beat_chroma_cols: (12, n_beats) array
-        key_idx: estimated key index (0-11)
-        decode_mode: 'direct' (default, safe), 'hybrid', or 'factorized'
-        bass_beat_chroma: (12, n_beats) bass HPCP array, or None
-
-    Returns:
-        (list of chord name strings, best_key_idx, full_probs)
-    """
-    sys.path.insert(0, _TRAINING_ROOT)
-    from v2.decode import (
-        decode_tier1_direct, decode_factorized, decode_hybrid,
-        smooth_isolated, get_classifier_probs, soften_transitions,
-        viterbi_decode,
-    )
-    from shared.chord_vocab import TIER1_VOCAB as vocab
-
-    feat_dim = model.get('feature_dim', 12)
-    feature_config = model.get('feature_config', {})
-    n_beats = beat_chroma_cols.shape[1]
-
-    # Build context HPCP features
-    ctx_radius = feature_config.get('context_radius', 1) if feature_config else 1
-    if feat_dim >= 36 and not feature_config:
-        # Legacy model: infer radius from feature_dim (assumes HPCP-only)
-        ctx_radius = (feat_dim // 12 - 1) // 2
-
-    if feat_dim >= 36:
-        X = _build_context_features(beat_chroma_cols, radius=ctx_radius)
-    else:
-        X = beat_chroma_cols.T  # (n_beats, 12)
-
-    # Append optional extra features (must match training order)
-    bc = beat_chroma_cols.T  # (n_beats, 12)
-    extras = []
-    if feature_config.get('has_delta'):
-        delta = np.zeros_like(bc, dtype=np.float32)
-        delta[1:] = bc[1:] - bc[:-1]
-        extras.append(delta)
-    if feature_config.get('has_bass') and bass_beat_chroma is not None:
-        extras.append(bass_beat_chroma.T)  # (n_beats, 12)
-    if extras:
-        X = np.concatenate([X] + extras, axis=1)
-
-    # L2 normalize
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    X_norm = X / norms
-
-    # Try all 12 key hypotheses (same as v1) — pick best Viterbi score
-    best_score = -np.inf
-    best_path = None
-    best_key = key_idx
-    best_probs = None
-
-    n_classes = len(vocab)
-    log_prior = np.full(n_classes, -np.log(n_classes))
-
-    for ki in range(12):
-        if decode_mode == 'hybrid':
-            path, full_probs, log_lik = decode_hybrid(model, X_norm, ki)
-        elif decode_mode == 'factorized':
-            path, _, _, full_probs, log_lik = decode_factorized(model, X_norm, ki)
-        else:  # direct (default)
-            path, full_probs, log_lik = decode_tier1_direct(model, X_norm, ki)
-
-        path = smooth_isolated(path)
-
-        # Score: Viterbi log-likelihood (proper key comparison metric)
-        if log_lik > best_score:
-            best_score = log_lik
-            best_path = path
-            best_key = ki
-            best_probs = full_probs
-
-    return [vocab[ci] for ci in best_path], best_key, best_probs
-
-
-def _model_viterbi_decode(model, beat_chroma_cols, key_idx):
-    """Decode chords using trained model + learned transitions.
-
-    Tries all 12 major key hypotheses and picks the one with the highest
-    overall Viterbi log-likelihood.  This makes the system robust to
-    wrong key detection (e.g. Bb detected when the true key is F).
-
-    Args:
-        model: dict with 'classifier', 'transition_probs', 'key_priors', 'vocab'
-        beat_chroma_cols: (12, n_beats) array
-        key_idx: int, estimated key from Essentia (used only as hint, all 12 tried)
-
-    Returns:
-        (list of chord name strings, best_key_idx, full_probs)
-    """
-    clf = model['classifier']
-    trans = model['transition_probs']
-    key_priors = model['key_priors']
-    vocab = model['vocab']
-    n_classes = len(vocab)
-
-    n_beats = beat_chroma_cols.shape[1]
-    X = beat_chroma_cols.T  # (n_beats, 12)
-
-    # L2 normalize (shared across all key hypotheses)
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    X_norm = X / norms
-
-    # Soften transitions (shared across all key hypotheses)
-    trans_soft = trans.copy()
-    SELF_PROB = 0.40
-    FLOOR = 0.015
-    for i in range(n_classes):
-        trans_soft[i, i] = SELF_PROB
-        off_diag = trans[i].copy()
-        off_diag[i] = 0
-        off_sum = off_diag.sum()
-        if off_sum > 0:
-            off_diag = np.maximum(off_diag / off_sum * (1 - SELF_PROB), FLOOR)
-            off_diag = off_diag / off_diag.sum() * (1 - SELF_PROB)
-        trans_soft[i] = off_diag
-        trans_soft[i, i] = SELF_PROB
-
-    log_trans = np.log(np.clip(trans_soft, 1e-10, None))
-    log_prior = np.full(n_classes, -np.log(n_classes))
-
-    best_score = -np.inf
-    best_path = None
-    best_key = key_idx
-
-    # Classifier takes only HPCP features (12 dims) — no key priors
-    if hasattr(clf, 'predict_proba'):
-        probs = clf.predict_proba(X_norm)
-        full_probs = np.full((n_beats, n_classes), 1e-10)
-        for ci, cls in enumerate(clf.classes_):
-            full_probs[:, cls] = probs[:, ci]
-    else:
-        pred = clf.predict(X_norm)
-        full_probs = np.full((n_beats, n_classes), 1e-10)
-        for i, p in enumerate(pred):
-            full_probs[i, p] = 1.0
-
-    log_emit_base = np.log(np.clip(full_probs.T, 1e-10, None))  # (n_classes, n_beats)
-
-    for ki in range(12):
-        # Apply key prior as emission bias only
-        log_key_prior = np.log(np.clip(key_priors[ki], 1e-10, None))
-        log_emit = log_emit_base + log_key_prior[:, np.newaxis] * 0.3
-
-        # Viterbi
-        viterbi = np.full((n_classes, n_beats), -np.inf)
-        backptr = np.zeros((n_classes, n_beats), dtype=int)
-        viterbi[:, 0] = log_prior + log_emit[:, 0]
-
-        for t in range(1, n_beats):
-            for s in range(n_classes):
-                scores = viterbi[:, t - 1] + log_trans[:, s]
-                bp = int(np.argmax(scores))
-                viterbi[s, t] = scores[bp] + log_emit[s, t]
-                backptr[s, t] = bp
-
-        # Total score = best final state score
-        final_score = float(np.max(viterbi[:, -1]))
-
-        if final_score > best_score:
-            best_score = final_score
-            best_key = ki
-            # Backtrace
-            path = np.zeros(n_beats, dtype=int)
-            path[-1] = int(np.argmax(viterbi[:, -1]))
-            for t in range(n_beats - 2, -1, -1):
-                path[t] = backptr[path[t + 1], t + 1]
-            best_path = path
-
-    return [vocab[ci] for ci in best_path], best_key, full_probs
 
 
 def _break_long_runs(path, full_probs, vocab, beat_times, key_idx, max_dur=4.0):
@@ -585,6 +713,38 @@ def _break_long_runs(path, full_probs, vocab, beat_times, key_idx, max_dur=4.0):
     return result
 
 
+def _gate_leading_silence_beats(audio_eq, beat_times, chord_labels, sr, rel_frac=0.08):
+    """Set chord to N for beats from the start until RMS exceeds rel_frac × track peak.
+
+    The chord model can label beats while the mix is still inaudible (silent intro,
+    video lead-in). Only **leading** beats are changed so quiet verses mid-song are
+    not wiped. Uses equal-loudness audio so bass in the first bar still counts.
+    """
+    if not beat_times or not chord_labels or len(chord_labels) != len(beat_times):
+        return chord_labels
+    n = len(beat_times)
+    n_audio = len(audio_eq)
+    rms_list = []
+    for bi in range(n):
+        t0 = float(beat_times[bi])
+        t1 = float(beat_times[bi + 1]) if bi + 1 < n else t0 + 0.5
+        i0 = int(max(0, min(n_audio - 1, round(t0 * sr))))
+        i1 = int(max(i0 + 1, min(n_audio, round(t1 * sr))))
+        seg = audio_eq[i0:i1]
+        rms_list.append(float(np.sqrt(np.mean(seg ** 2))) if len(seg) else 0.0)
+    peak = max(rms_list) if rms_list else 0.0
+    if peak < 1e-10:
+        return chord_labels
+    rel_frac = max(0.02, min(0.5, float(rel_frac)))
+    thresh = rel_frac * peak
+    out = list(chord_labels)
+    for bi in range(n):
+        if rms_list[bi] >= thresh:
+            break
+        out[bi] = 'N'
+    return out
+
+
 def analyze(audio_path):
     audio = MonoLoader(filename=audio_path, sampleRate=SR)()
 
@@ -592,19 +752,43 @@ def analyze(audio_path):
     audio_eq = EqualLoudness(sampleRate=SR)(audio)
     audio = HighPass(cutoffFrequency=100, sampleRate=SR)(audio_eq)
 
-    # ── Beat tracking (use original audio for rhythm) ──
-    audio_raw = MonoLoader(filename=audio_path, sampleRate=SR)()
-    rhythm = RhythmExtractor2013(method='multifeature')
-    bpm, beats, beats_confidence, _, beats_intervals = rhythm(audio_raw)
-    beat_times = beats.tolist()
+    # ── Beat tracking ──
+    use_beat_this = os.environ.get('USE_BEAT_THIS', '1').lower() not in ('0', 'false', 'no')
+    beat_times = None
+    downbeat_times = None
 
-    # Filter out beats that are too close together (< 0.15s)
-    if len(beat_times) > 1:
-        filtered = [beat_times[0]]
-        for bt in beat_times[1:]:
-            if bt - filtered[-1] >= 0.15:
-                filtered.append(bt)
-        beat_times = filtered
+    if use_beat_this:
+        try:
+            beat_times, downbeat_times = _detect_beats_beat_this(audio_path)
+            if len(beat_times) >= 2:
+                intervals = np.diff(beat_times)
+                bpm = 60.0 / np.median(intervals)
+            else:
+                bpm = 120.0
+        except Exception:
+            beat_times = None
+
+    if beat_times is None:
+        audio_raw = MonoLoader(filename=audio_path, sampleRate=SR)()
+        rhythm = RhythmExtractor2013(method='multifeature')
+        bpm, beats, beats_confidence, _, beats_intervals = rhythm(audio_raw)
+        beat_times = beats.tolist()
+
+        # Onset-based beat trackers place beats slightly before the perceived impact.
+        try:
+            beat_offset = float(os.environ.get('BEAT_OFFSET_MS', '50')) / 1000.0
+        except ValueError:
+            beat_offset = 0.05
+        if beat_offset != 0:
+            beat_times = [max(0.0, t + beat_offset) for t in beat_times]
+
+        # Filter out beats that are too close together (< 0.15s)
+        if len(beat_times) > 1:
+            filtered = [beat_times[0]]
+            for bt in beat_times[1:]:
+                if bt - filtered[-1] >= 0.15:
+                    filtered.append(bt)
+            beat_times = filtered
 
     # ── Compute 12-bin HPCP per frame + spectral flatness ──
     windowing = Windowing(type='blackmanharris62', size=FRAME_SIZE)
@@ -689,75 +873,72 @@ def analyze(audio_path):
             'key': key_str, 'beat_times': [],
         }
 
-    # ── Try trained model first, fall back to templates ──
-    trained_model = _load_trained_model()
+    # ── Try BTC, then Transformer+CRF freeze5, then template fallback ──
+    use_btc = os.environ.get('USE_BTC', '1').lower() not in ('0', 'false', 'no')
+    use_freeze5 = os.environ.get('USE_FREEZE5', '1').lower() not in ('0', 'false', 'no')
+    final_path = None
 
-    if trained_model is not None:
-        model_version = trained_model.get('version', 1)
-        _IDX_TO_NOTE = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+    if use_btc and os.path.isfile(_btc_checkpoint_path()):
+        try:
+            btc_chords = _btc_decode_chords(audio_path, beat_times)
+            if btc_chords is not None and len(btc_chords) == len(beat_times):
+                final_path = btc_chords
+        except Exception:
+            final_path = None
 
-        if model_version >= 2:
-            # ── V2 model: hybrid decode by default ──
-            # Hybrid = factorized root (best root acc) + direct quality (preserves minors)
-            # Override via CHORD_DECODE_MODE env var: 'direct', 'hybrid', 'factorized'
-            decode_mode = os.environ.get('CHORD_DECODE_MODE', 'hybrid')
+    if final_path is None and use_freeze5 and os.path.isfile(_freeze5_checkpoint_path()):
+        try:
+            final_path, best_key = _freeze5_decode_chords(beat_chroma, key_idx, beat_times)
+            _IDX_TO_NOTE = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
+            key_str = _IDX_TO_NOTE[best_key]
+        except Exception:
+            final_path = None
 
-            # Extract bass HPCP if model requires it
-            bass_bc = None
-            feature_config = trained_model.get('feature_config', {})
-            if feature_config and feature_config.get('has_bass'):
-                bass_bc = _extract_bass_beat_chroma(audio_eq, beat_frames, n_frames)
-
-            final_path, best_key_idx, full_probs = _model_viterbi_decode_v2(
-                trained_model, beat_chroma, key_idx, decode_mode=decode_mode,
-                bass_beat_chroma=bass_bc)
-            vocab_list = trained_model.get('tier1_vocab', NOTES)
-            # Break up long runs using direct probs
-            final_path = _break_long_runs(final_path, full_probs,
-                                          vocab_list, beat_times, best_key_idx)
-        else:
-            # ── V1 model: original decode path ──
-            final_path, best_key_idx, full_probs = _model_viterbi_decode(
-                trained_model, beat_chroma, key_idx)
-            final_path = _break_long_runs(final_path, full_probs,
-                                          trained_model['vocab'], beat_times,
-                                          best_key_idx)
-        key_str = _IDX_TO_NOTE[best_key_idx]
-    else:
+    if final_path is None:
         # ── Template fallback: hand-crafted templates + diatonic bias ──
-        KEY_BOOST = 1.0              # Strong diatonic preference
-        SEC_DOM_BOOST = 0.3          # Mild boost for secondary dominants
-        simple_bias = np.zeros((len(SIMPLE_CHORDS), 1))
-        for ci, name in enumerate(SIMPLE_CHORDS):
-            if name in diatonic:
-                simple_bias[ci, 0] = KEY_BOOST
-            elif name in sec_doms:
-                simple_bias[ci, 0] = SEC_DOM_BOOST
+            KEY_BOOST = 1.0              # Strong diatonic preference
+            SEC_DOM_BOOST = 0.3          # Mild boost for secondary dominants
+            simple_bias = np.zeros((len(SIMPLE_CHORDS), 1))
+            for ci, name in enumerate(SIMPLE_CHORDS):
+                if name in diatonic:
+                    simple_bias[ci, 0] = KEY_BOOST
+                elif name in sec_doms:
+                    simple_bias[ci, 0] = SEC_DOM_BOOST
 
-        simple_path = _viterbi_decode(
-            SIMPLE_MATRIX, SIMPLE_CHORDS, beat_chroma,
-            self_prob=0.95, emission_bias=simple_bias,
-        )
+            simple_path = _viterbi_decode(
+                SIMPLE_MATRIX, SIMPLE_CHORDS, beat_chroma,
+                self_prob=0.95, emission_bias=simple_bias,
+            )
 
-        # Promote to extended chords where evidence is strong
-        PROMOTE_THRESH = 0.15
-        norms = np.linalg.norm(beat_chroma, axis=0, keepdims=True)
-        norms[norms == 0] = 1.0
-        bc_normed = beat_chroma / norms
-        full_sim = TEMPLATE_MATRIX @ bc_normed
+            # Promote to extended chords where evidence is strong
+            PROMOTE_THRESH = 0.15
+            norms = np.linalg.norm(beat_chroma, axis=0, keepdims=True)
+            norms[norms == 0] = 1.0
+            bc_normed = beat_chroma / norms
+            full_sim = TEMPLATE_MATRIX @ bc_normed
 
-        final_path = []
-        for bi, simple_name in enumerate(simple_path):
-            simple_score = full_sim[ALL_CHORDS.index(simple_name), bi]
-            best_ext_name  = simple_name
-            best_ext_score = simple_score
-            for ext_name, parent in _EXTENDED_TO_SIMPLE.items():
-                if parent == simple_name:
-                    ext_score = full_sim[ALL_CHORDS.index(ext_name), bi]
-                    if ext_score > best_ext_score + PROMOTE_THRESH:
-                        best_ext_name  = ext_name
-                        best_ext_score = ext_score
-            final_path.append(best_ext_name)
+            final_path = []
+            for bi, simple_name in enumerate(simple_path):
+                simple_score = full_sim[ALL_CHORDS.index(simple_name), bi]
+                best_ext_name  = simple_name
+                best_ext_score = simple_score
+                for ext_name, parent in _EXTENDED_TO_SIMPLE.items():
+                    if parent == simple_name:
+                        ext_score = full_sim[ALL_CHORDS.index(ext_name), bi]
+                        if ext_score > best_ext_score + PROMOTE_THRESH:
+                            best_ext_name  = ext_name
+                            best_ext_score = ext_score
+                final_path.append(best_ext_name)
+
+    # ── Leading silence: force N until RMS reaches a fraction of peak (model often
+    #    labels beats before audible onset; only affects beats from the start).
+    if os.environ.get('SILENCE_GATE', '1').lower() not in ('0', 'false', 'no'):
+        try:
+            rel = float(os.environ.get('SILENCE_GATE_FRAC', '0.08'))
+        except ValueError:
+            rel = 0.08
+        final_path = _gate_leading_silence_beats(
+            audio_eq, beat_times, final_path, SR, rel_frac=rel)
 
     # ── Post-processing: remove very short chord segments (< 1 beat) ──
     # Replace isolated single-beat chords surrounded by the same chord

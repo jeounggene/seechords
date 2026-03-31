@@ -114,6 +114,50 @@ def compute_delta_chroma(beat_chroma, song_ids=None):
     return delta
 
 
+def extract_cqt(audio_path, sr=22050, hop_length=2048, n_bins=144,
+                bins_per_octave=24):
+    """Extract CQT spectrogram (log-magnitude, matching ChordMini convention).
+
+    Returns (n_frames, 144) float32 array.
+    """
+    import librosa
+    y, _ = librosa.load(audio_path, sr=sr)
+    cqt = librosa.cqt(y, sr=sr, hop_length=hop_length,
+                       n_bins=n_bins, bins_per_octave=bins_per_octave,
+                       fmin=librosa.note_to_hz('C1'))
+    return np.log(np.abs(cqt) + 1e-6).T.astype(np.float32)
+
+
+def sync_cqt_to_beats(cqt_frames, beat_times, sr=22050, hop_length=2048):
+    """Aggregate frame-level CQT (n_frames, D) to beat-level using mean.
+
+    Args:
+        cqt_frames: (n_frames, D) CQT feature matrix
+        beat_times: list of beat times in seconds
+        sr: sample rate used for CQT
+        hop_length: hop length used for CQT
+
+    Returns:
+        (n_beats, D) beat-synced CQT features
+    """
+    n_frames, dim = cqt_frames.shape
+    n_beats = len(beat_times)
+    beat_cqt = np.zeros((n_beats, dim), dtype=np.float32)
+
+    for bi in range(n_beats):
+        t_start = beat_times[bi]
+        t_end = beat_times[bi + 1] if bi + 1 < n_beats else t_start + 0.5
+        f_start = max(0, int(round(t_start * sr / hop_length)))
+        f_end = min(n_frames, int(round(t_end * sr / hop_length)))
+        if f_end <= f_start:
+            f_end = f_start + 1
+        f_start = min(f_start, n_frames - 1)
+        f_end = min(f_end, n_frames)
+        beat_cqt[bi] = cqt_frames[f_start:f_end].mean(axis=0)
+
+    return beat_cqt
+
+
 def compute_third_ratio(beat_chroma):
     """Compute major/minor 3rd energy ratio for each possible root.
 
@@ -234,6 +278,16 @@ def main():
                         help='Add 12-dim chroma delta features (temporal change)')
     parser.add_argument('--bass', action='store_true',
                         help='Add 12-dim bass-register HPCP features (50-350 Hz)')
+    parser.add_argument('--cqt', action='store_true',
+                        help='Extract 144-bin CQT features (beat-synced, for Transformer)')
+    parser.add_argument('--pseudo', type=str, default=None,
+                        help='Directory of pseudo-labeled .lab files (from BTC teacher)')
+    parser.add_argument('--pseudo-audio', type=str, default=None,
+                        help='Audio directory for pseudo-labeled songs')
+    parser.add_argument('--pseudo-weight', type=float, default=0.5,
+                        help='Sample weight for pseudo-labeled songs (default: 0.5)')
+    parser.add_argument('--beat-tracker', choices=['essentia', 'beat_this'], default='essentia',
+                        help='Beat tracker for songs without gold beats (default: essentia)')
     parser.add_argument('--out', default='data/features_v2.npz',
                         help='Output .npz file')
     args = parser.parse_args()
@@ -329,6 +383,35 @@ def main():
                 s['provenance'] = 'gold' if s['beats'] else 'silver'
             all_songs.extend(found)
 
+    # ── Add pseudo-labeled songs ──
+    if args.pseudo and args.pseudo_audio:
+        import glob as _glob
+        lab_files = sorted(_glob.glob(os.path.join(args.pseudo, '*.lab')))
+        audio_exts = ('*.mp3', '*.wav', '*.flac', '*.m4a', '*.ogg')
+        audio_map = {}
+        for ext in audio_exts:
+            for f in _glob.glob(os.path.join(args.pseudo_audio, ext)):
+                stem = os.path.splitext(os.path.basename(f))[0]
+                audio_map[stem] = f
+
+        n_pseudo = 0
+        for lab_path in lab_files:
+            stem = os.path.splitext(os.path.basename(lab_path))[0]
+            if stem in audio_map:
+                all_songs.append({
+                    'stem': f'pseudo_{stem}',
+                    'audio': audio_map[stem],
+                    'chords': lab_path,
+                    'beats': None,
+                    'key': None,
+                    'weight': args.pseudo_weight,
+                    'provenance': 'pseudo',
+                })
+                n_pseudo += 1
+        print(f"  pseudo: {n_pseudo}/{len(lab_files)} songs (weight={args.pseudo_weight})")
+    elif args.pseudo:
+        print("WARNING: --pseudo requires --pseudo-audio to specify audio directory")
+
     if not all_songs:
         print("No matching audio/annotation pairs found!")
         sys.exit(1)
@@ -381,6 +464,7 @@ def main():
 
     # Process each song
     all_X12, all_X36 = [], []
+    all_Xcqt = [] if args.cqt else None
     all_roots, all_quals, all_tier1 = [], [], []
     all_weights, all_song_ids = [], []
     all_beat_times, all_filenames, all_key_indices = [], [], []
@@ -397,8 +481,9 @@ def main():
                 beat_times = parse_beat_file(song['beats'])
                 beat_src = 'gold'
             else:
-                beat_times = detect_beats(song['audio'])
-                beat_src = 'auto'
+                beat_times = detect_beats(song['audio'],
+                                          use_beat_this=(args.beat_tracker == 'beat_this'))
+                beat_src = f'auto-{args.beat_tracker}'
 
             if song['key']:
                 kn, km = parse_key_file(song['key'])
@@ -422,6 +507,17 @@ def main():
             n = len(X12)
             all_X12.append(X12)
             all_X36.append(X_ctx)
+            if args.cqt:
+                try:
+                    cqt_frames = extract_cqt(song['audio'])
+                    beat_cqt = sync_cqt_to_beats(cqt_frames, bt)
+                    if len(beat_cqt) != n:
+                        beat_cqt = beat_cqt[:n] if len(beat_cqt) > n else np.vstack(
+                            [beat_cqt, np.zeros((n - len(beat_cqt), 144), dtype=np.float32)])
+                    all_Xcqt.append(beat_cqt)
+                except Exception as cqt_err:
+                    print(f"CQT extraction failed: {cqt_err}, using zeros")
+                    all_Xcqt.append(np.zeros((n, 144), dtype=np.float32))
             all_roots.append(roots)
             all_quals.append(quals)
             all_tier1.append(tier1)
@@ -471,12 +567,17 @@ def main():
         provenance=np.array(all_provenance, dtype=object),
     )
     save_dict[ctx_key] = X_ctx
+    if args.cqt and all_Xcqt:
+        X_cqt = np.concatenate(all_Xcqt, axis=0)
+        save_dict['X_cqt'] = X_cqt
+        print(f"  CQT features: X_cqt={X_cqt.shape}")
     # Store feature composition for train.py → model → server
     import json as _json2
     feature_config = {
         'context_radius': args.context_radius,
         'has_delta': args.delta,
         'has_bass': args.bass,
+        'has_cqt': args.cqt,
     }
     save_dict['feature_config'] = np.array(_json2.dumps(feature_config))
     np.savez_compressed(args.out, **save_dict)

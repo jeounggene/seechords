@@ -7,3 +7,6 @@ scipy>=1.7.0
 pdfplumber>=0.10.0
 essentia-tensorflow
 yt-dlp
+einops
+soxr
+rotary-embedding-torch

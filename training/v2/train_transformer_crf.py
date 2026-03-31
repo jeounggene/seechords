@@ -14,7 +14,9 @@ Usage:
 """
 import sys
 import os
+import json
 import argparse
+import random
 import time
 import numpy as np
 import torch
@@ -30,6 +32,16 @@ from v2.transformer_data import (
     ChordWindowDataset, get_song_data,
 )
 from v2.decode import smooth_isolated
+
+
+def _set_seed(seed: int) -> None:
+    """Best-effort reproducibility for training (PyTorch / NumPy / Python)."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    # MPS: deterministic algorithms not fully supported; seed still helps.
 
 
 def _masked_weighted_ce(logits, targets, beat_weights, pad_mask, criterion_none):
@@ -146,6 +158,9 @@ def train(args):
     else:
         device = torch.device('cpu')
     print(f"Device: {device}")
+    _set_seed(args.seed)
+    print(f"Random seed (init, shuffle): {args.seed}")
+    print(f"Split seed (train/val/test): {args.split_seed}")
 
     # ── Load data ──
     print(f"\n1. Loading data from {args.data}...")
@@ -159,7 +174,7 @@ def train(args):
 
     # ── Split ──
     print("\n2. Splitting data...")
-    train_set, val_set, test_set = split_songs(data)
+    train_set, val_set, test_set = split_songs(data, seed=args.split_seed)
     train_beats = np.sum([s in train_set for s in data['song_ids']])
     val_beats = np.sum([s in val_set for s in data['song_ids']])
     test_beats = np.sum([s in test_set for s in data['song_ids']])
@@ -175,8 +190,12 @@ def train(args):
     print(f"   Train windows: {len(train_ds)}" +
           (" (12x augmented)" if args.augment else ""))
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=0, pin_memory=False)
+    gen = torch.Generator()
+    gen.manual_seed(args.seed)
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch_size, shuffle=True,
+        num_workers=0, pin_memory=False, generator=gen,
+    )
 
     val_songs = get_song_data(data, val_set)
     test_songs = get_song_data(data, test_set)
@@ -539,6 +558,26 @@ def train(args):
         'model_state_dict': model.state_dict(),
         'model_type': 'ChordTransformerCRF',
         'hyperparams': {
+            'seed': args.seed,
+            'split_seed': args.split_seed,
+            'data': args.data,
+            'gold_only': args.gold_only,
+            'augment': args.augment,
+            'feature_dim': args.feature_dim,
+            'window': args.window,
+            'stride': args.stride,
+            'batch_size': args.batch_size,
+            'epochs': args.epochs,
+            'lr': args.lr,
+            'weight_decay': args.weight_decay,
+            'aux_weight': args.aux_weight,
+            'quality_weight': args.quality_weight,
+            'crf_weight': args.crf_weight,
+            'flip_penalty': args.flip_penalty,
+            'target_flip': args.target_flip,
+            'patience': args.patience,
+            'eval_every': args.eval_every,
+            'hybrid_emissions': args.hybrid_emissions,
             'input_dim': data['X'].shape[1],
             'd_model': args.d_model,
             'nhead': args.nhead,
@@ -583,8 +622,22 @@ def train(args):
 
 
 def main():
+    # Strip --config from argv so argparse does not see unknown --config
+    argv = sys.argv[1:]
+    cfg_path = None
+    filtered = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--config' and i + 1 < len(argv):
+            cfg_path = argv[i + 1]
+            i += 2
+            continue
+        filtered.append(argv[i])
+        i += 1
+    sys.argv = [sys.argv[0]] + filtered
+
     parser = argparse.ArgumentParser(description='Train Transformer + CRF chord model')
-    parser.add_argument('--data', required=True, help='Path to features_v2.npz')
+    parser.add_argument('--data', default=None, help='Path to features_v2.npz (or set in --config JSON)')
     parser.add_argument('--out', default='models/chord_transformer_crf.pt', help='Output checkpoint path')
     parser.add_argument('--init-transitions-from', default=None,
                         help='Path to RF .pkl model to initialize CRF transitions from learned tier1 matrix')
@@ -601,8 +654,8 @@ def main():
                         help='Add key embedding (12 roots) to quality logits (uses song key from npz)')
     parser.add_argument('--key-aux-weight', type=float, default=0.0,
                         help='If >0, add song-level key classifier (12-way) with this CE weight')
-    parser.add_argument('--feature-dim', type=int, default=48, choices=[24, 48, 60, 72],
-                        help='Input feature dim: 48 = RF parity (context+bass); 60 = +raw HPCP; 72 adds 3rd-ratio')
+    parser.add_argument('--feature-dim', type=int, default=48, choices=[24, 48, 60, 72, 144],
+                        help='Input feature dim: 48 = RF parity; 60 = +HPCP; 72 = +3rd-ratio; 144 = CQT')
     parser.add_argument('--window', type=int, default=128, help='Window length in beats')
     parser.add_argument('--stride', type=int, default=64, help='Stride between windows')
     parser.add_argument('--augment', action='store_true',
@@ -657,8 +710,20 @@ def main():
     parser.add_argument('--patience', type=int, default=40, help='Early stopping patience (epochs)')
     parser.add_argument('--eval-every', type=int, default=5, help='Evaluate every N epochs')
     parser.add_argument('--cpu', action='store_true', help='Force CPU training')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='RNG seed (DataLoader shuffle, torch/numpy; not the data split)')
+    parser.add_argument('--split-seed', type=int, default=42,
+                        help='Seed for stratified train/val/test split (keep fixed across weight-init seeds)')
+    if cfg_path:
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        for k in ('comment', 'description'):
+            cfg.pop(k, None)
+        parser.set_defaults(**cfg)
 
     args = parser.parse_args()
+    if not args.data:
+        parser.error('--data is required (e.g. data/features_v2.npz or via --config JSON)')
     train(args)
 
 

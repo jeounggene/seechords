@@ -42,7 +42,7 @@ SeeChords does not use any remote code. All JavaScript is bundled within the ext
 - Audio submitted for analysis is processed server-side and immediately deleted — no copyrighted audio is stored, cached, or redistributed.
 - Only derived, non-copyrightable data (chord names and beat timestamps) is retained.
 
-**Privacy Policy URL:** (host privacy-policy.html somewhere — e.g. GitHub Pages, or add a /privacy route to your Fly server)
+**Privacy Policy URL:** `https://seechords.fly.dev/privacy`
 
 ---
 

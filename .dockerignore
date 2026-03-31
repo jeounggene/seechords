@@ -1,0 +1,17 @@
+# Exclude bulky artifacts from build context; exception for the single shipped checkpoint.
+.git
+.gitignore
+.cursor
+.claude
+.venv
+**/__pycache__
+*.pyc
+training/data
+training/logs
+server/uploads
+server/*.db
+**/audio
+training/models/*
+!training/models/chord_transformer_crf_freeze5.pt
+server/btc_model/*.pt
+server/btc_model/*.pth

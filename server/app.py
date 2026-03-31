@@ -1,10 +1,12 @@
 """SeeChords backend – chord analysis API for the Chrome extension.
 
 Endpoints:
-  GET  /api/chords/<videoId>   → cached chord JSON or 404
-  POST /api/analyze            → upload MP3 + videoId, returns job_id
-  GET  /api/status/<job_id>    → poll analysis progress
-  GET  /api/health             → diagnostic info
+  GET  /                         → marketing site (extension info, donate, privacy links)
+  GET  /privacy                  → extension privacy policy (HTML)
+  GET  /api/chords/<videoId>     → cached chord JSON or 404
+  POST /api/analyze              → upload MP3 + videoId, returns job_id
+  GET  /api/status/<job_id>      → poll analysis progress
+  GET  /api/health               → diagnostic info
 """
 import os
 import sys
@@ -18,7 +20,7 @@ import sqlite3
 import time
 import subprocess
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 import librosa
 import numpy as np
@@ -1266,6 +1268,24 @@ def _do_ingest_audio_only(job_id, audio_path, song_name):
         _update_ingest_job(job_id, {
             'status': 'error', 'message': f'Audio analysis failed: {exc}',
         })
+
+
+# Public listing; override with SEECHORDS_CHROME_STORE_URL if the URL ever changes.
+DEFAULT_CHROME_STORE_URL = (
+    'https://chromewebstore.google.com/detail/SeeChords/bkmkkgblbnakckgdehgjaggnmglcljmj'
+)
+
+
+@app.route('/')
+def site_home():
+    """Marketing landing page for the SeeChords browser extension."""
+    donation_url = os.environ.get('SEECHORDS_DONATION_URL', '').strip()
+    chrome_store_url = os.environ.get('SEECHORDS_CHROME_STORE_URL', DEFAULT_CHROME_STORE_URL).strip()
+    return render_template(
+        'site_home.html',
+        donation_url=donation_url,
+        chrome_store_url=chrome_store_url,
+    )
 
 
 @app.route('/privacy')

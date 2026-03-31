@@ -32,7 +32,7 @@ class CRF(nn.Module):
         self.start_transitions = nn.Parameter(torch.zeros(num_tags))
         self.end_transitions = nn.Parameter(torch.zeros(num_tags))
 
-        self._init_params(init_self_bi
+        self._init_params(init_self_bias)
 
     def _init_params(self, self_bias):
         nn.init.uniform_(self.transitions, -0.1, 0.1)

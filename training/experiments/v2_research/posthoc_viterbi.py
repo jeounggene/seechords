@@ -204,7 +204,8 @@ def main():
         gold_only = ckpt.get('gold_only', True)
         feature_dim = hp.get('input_dim', 24)
         data = load_data(args.data, gold_only=gold_only, feature_dim=feature_dim)
-        _, val_set, test_set = split_songs(data)
+        split_seed = hp.get('split_seed', hp.get('seed', 42))
+        _, val_set, test_set = split_songs(data, seed=split_seed)
         song_set = val_set if args.split == 'val' else test_set
         songs = get_song_data(data, song_set)
 

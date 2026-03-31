@@ -174,8 +174,16 @@ def extract_hpcp(audio_path):
     return hpcps, hpcps_native, flatness_weights
 
 
-def detect_beats(audio_path):
-    """Auto-detect beats (fallback when no gold beats)."""
+_BEAT_THIS_MODEL = None
+
+
+def detect_beats(audio_path, use_beat_this=False):
+    """Auto-detect beats. Uses Beat This! transformer if requested, else Essentia."""
+    if use_beat_this:
+        try:
+            return _detect_beats_beat_this(audio_path)
+        except Exception:
+            pass
     audio = MonoLoader(filename=audio_path, sampleRate=SR)()
     rhythm = RhythmExtractor2013(method='multifeature')
     _, beats, _, _, _ = rhythm(audio)
@@ -187,6 +195,17 @@ def detect_beats(audio_path):
                 filtered.append(b)
         bt = filtered
     return bt
+
+
+def _detect_beats_beat_this(audio_path):
+    """Detect beats using Beat This! transformer model (ISMIR 2024)."""
+    global _BEAT_THIS_MODEL
+    if _BEAT_THIS_MODEL is None:
+        from beat_this.inference import File2Beats
+        _BEAT_THIS_MODEL = File2Beats(
+            checkpoint_path="small0", device="cpu", dbn=False)
+    beats, _downbeats = _BEAT_THIS_MODEL(audio_path)
+    return beats.tolist()
 
 
 def detect_key(hpcps_native):

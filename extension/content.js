@@ -31,6 +31,8 @@ let currentRating   = 0;    // current star rating (0 = unrated)
 
 
 const PX_PER_BEAT = 48;
+/** Forces first applyChordDisplayFromVideoTime after tracking starts (avoids -1 === -1 skipping UI). */
+const SYNC_UNSET = -999;
 
 // ─── Isophonics → Display Converter ──────────────────────
 const _ISO_TO_DISPLAY = {
@@ -420,6 +422,10 @@ function buildBeatChords() {
 }
 
 function findBeatAt(t) {
+  if (!beatTimes.length) return -1;
+  // Before the first beat time we are not "on" beat 0 yet (avoids showing the
+  // first chord from t=0 while the first beat is later — intro / silence).
+  if (t < beatTimes[0]) return -1;
   let bi = 0;
   for (let i = 0; i < beatTimes.length; i++) {
     if (beatTimes[i] <= t) bi = i; else break;
@@ -429,6 +435,7 @@ function findBeatAt(t) {
 
 function findBeatChordAt(t) {
   const bi = findBeatAt(t);
+  if (bi < 0) return -1;
   for (let i = 0; i < beatChords.length; i++) {
     const bc = beatChords[i];
     if (bi >= bc.beatStart && bi < bc.beatStart + bc.beatCount) return i;
@@ -470,6 +477,11 @@ function injectOverlay() {
         <button class="sc-ctrl-btn" id="scTransposeDown" title="Transpose down">▼</button>
         <span class="sc-ctrl-label" id="scTransposeLabel">Original</span>
         <button class="sc-ctrl-btn" id="scTransposeUp" title="Transpose up">▲</button>
+      </div>
+      <div class="sc-sync-controls">
+        <button class="sc-ctrl-btn" id="scSyncEarlier" title="Chords earlier (−50ms)">◁</button>
+        <span class="sc-ctrl-label sc-sync-label" id="scSyncLabel">Sync</span>
+        <button class="sc-ctrl-btn" id="scSyncLater" title="Chords later (+50ms)">▷</button>
       </div>
       <div class="sc-version-controls" id="scVersionControls" style="display:none;">
         <select class="sc-version-select" id="scVersionSelect" title="Switch chord version"></select>
@@ -585,6 +597,29 @@ function injectOverlay() {
     transposeSteps++;
     refreshDisplay();
   });
+
+  // Sync nudge
+  const SYNC_STEP = 0.05; // 50 ms per click
+  function updateSyncLabel() {
+    const el = document.getElementById('scSyncLabel');
+    if (!el) return;
+    if (offsetSeconds === 0) { el.textContent = 'Sync'; return; }
+    const ms = Math.round(offsetSeconds * 1000);
+    el.textContent = (ms > 0 ? '+' : '') + ms + 'ms';
+  }
+  document.getElementById('scSyncEarlier').addEventListener('click', () => {
+    offsetSeconds = Math.round((offsetSeconds - SYNC_STEP) * 1000) / 1000;
+    updateSyncLabel();
+    currentBeatIdx = SYNC_UNSET;
+    currentChordIdx = SYNC_UNSET;
+  });
+  document.getElementById('scSyncLater').addEventListener('click', () => {
+    offsetSeconds = Math.round((offsetSeconds + SYNC_STEP) * 1000) / 1000;
+    updateSyncLabel();
+    currentBeatIdx = SYNC_UNSET;
+    currentChordIdx = SYNC_UNSET;
+  });
+
   document.getElementById('scToggle').addEventListener('click', () => {
     const body = document.getElementById('scBody');
     const btn  = document.getElementById('scToggle');
@@ -746,10 +781,15 @@ function renderTimeline() {
 
     const gi = beatToGroup[bi];
     const bc = beatChords[gi];
-    if (bc && bc.beatStart === bi && bc.chord !== 'N') {
+    if (bc && bc.beatStart === bi) {
       const name = document.createElement('span');
-      name.className   = 'sc-beat-name';
-      name.innerHTML = formatChordHTML(transposeChord(bc.chord, transposeSteps));
+      if (bc.chord === 'N') {
+        name.className = 'sc-beat-name sc-beat-n';
+        name.textContent = 'N';
+      } else {
+        name.className = 'sc-beat-name';
+        name.innerHTML = formatChordHTML(transposeChord(bc.chord, transposeSteps));
+      }
       div.appendChild(name);
     }
 
@@ -764,6 +804,15 @@ function renderTimeline() {
 }
 
 function setCardContent(bci) {
+  if (bci < 0 || !beatChords.length) {
+    ['scCardPrev', 'scCardActive', 'scCardNext'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.querySelector('.sc-chord-name').textContent = '';
+      el.querySelector('.sc-chord-diagram').innerHTML = '';
+    });
+    return;
+  }
   [
     { id: 'scCardPrev',   i: bci - 1 },
     { id: 'scCardActive', i: bci },
@@ -772,9 +821,18 @@ function setCardContent(bci) {
     const el = document.getElementById(id);
     if (!el) return;
     const bc = beatChords[i];
-    const t  = (bc && bc.chord !== 'N') ? transposeChord(bc.chord, transposeSteps) : null;
-    el.querySelector('.sc-chord-name').textContent  = t ? formatChord(t) : '';
-    el.querySelector('.sc-chord-diagram').innerHTML = t ? buildChordSVG(t) : '';
+    let label = '';
+    let diagramChord = null;
+    if (bc) {
+      if (bc.chord === 'N') {
+        label = 'N';
+      } else {
+        diagramChord = transposeChord(bc.chord, transposeSteps);
+        label = formatChord(diagramChord);
+      }
+    }
+    el.querySelector('.sc-chord-name').textContent = label;
+    el.querySelector('.sc-chord-diagram').innerHTML = diagramChord ? buildChordSVG(diagramChord) : '';
   });
 }
 
@@ -795,30 +853,31 @@ function refreshDisplay() {
   document.querySelectorAll('#scTlRow .sc-beat-name').forEach(nameEl => {
     const bi = +nameEl.closest('.sc-beat-block').dataset.bi;
     const gi = beatChords.findIndex(bc => bc.beatStart === bi);
-    if (gi >= 0) nameEl.innerHTML = formatChordHTML(transposeChord(beatChords[gi].chord, tt));
+    if (gi < 0) return;
+    const ch = beatChords[gi].chord;
+    if (ch === 'N') {
+      nameEl.classList.add('sc-beat-n');
+      nameEl.textContent = 'N';
+    } else {
+      nameEl.classList.remove('sc-beat-n');
+      nameEl.innerHTML = formatChordHTML(transposeChord(ch, tt));
+    }
   });
 
   if (currentChordIdx >= 0) setCardContent(currentChordIdx);
+  else if (currentChordIdx === -1) setCardContent(-1);
 }
 
-// ─── Tracking Loop ───────────────────────────────────────
-function trackLoop() {
-  const v = findVideoElement();
-  if (!v || v.paused) {
-    rafId = requestAnimationFrame(trackLoop);
-    return;
-  }
-
-  const t = v.currentTime + offsetSeconds;
-
+/** Sync timeline highlight + chord cards to a video timeline position (seconds). */
+function applyChordDisplayFromVideoTime(videoTime) {
+  const t = videoTime + offsetSeconds;
   const chordIdx = findBeatChordAt(t);
-  const bi       = findBeatAt(t);
+  const bi = findBeatAt(t);
 
   if (bi !== currentBeatIdx) {
     currentBeatIdx = bi;
-    // Highlight beat block
     document.querySelectorAll('#scTlRow .sc-beat-block').forEach((el, idx) => {
-      el.classList.toggle('sc-active', idx === bi);
+      el.classList.toggle('sc-active', bi >= 0 && idx === bi);
     });
     const active = document.querySelector('#scTlRow .sc-beat-block.sc-active');
     if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
@@ -826,8 +885,8 @@ function trackLoop() {
 
   if (chordIdx !== currentChordIdx) {
     currentChordIdx = chordIdx;
+    setCardContent(chordIdx);
     if (chordIdx >= 0) {
-      setCardContent(chordIdx);
       const activeCard = document.getElementById('scCardActive');
       if (activeCard) {
         activeCard.classList.remove('sc-entering');
@@ -836,14 +895,26 @@ function trackLoop() {
       }
     }
   }
+}
+
+// ─── Tracking Loop ───────────────────────────────────────
+function trackLoop() {
+  const v = findVideoElement();
+  if (!v) {
+    rafId = requestAnimationFrame(trackLoop);
+    return;
+  }
+
+  // Update while paused too (seek / scrub) — not only during playback.
+  applyChordDisplayFromVideoTime(v.currentTime);
 
   rafId = requestAnimationFrame(trackLoop);
 }
 
 function startTracking() {
   stopTracking();
-  currentBeatIdx = -1;
-  currentChordIdx = -1;
+  currentBeatIdx = SYNC_UNSET;
+  currentChordIdx = SYNC_UNSET;
   rafId = requestAnimationFrame(trackLoop);
 }
 
@@ -1064,11 +1135,11 @@ function useChordSheet() {
     end:   seg.end,
   }));
   transposeSteps = 0;
-  currentBeatIdx  = -1;
-  currentChordIdx = -1;
+  currentBeatIdx  = SYNC_UNSET;
+  currentChordIdx = SYNC_UNSET;
   document.getElementById('scTransposeLabel').textContent = 'Original';
   renderTimeline();
-  if (beatChords.length > 0) setCardContent(0);
+  applyChordDisplayFromVideoTime(findVideoElement() ? findVideoElement().currentTime : 0);
   // Close the compare panel
   document.getElementById('scComparePanel').style.display = 'none';
 }
@@ -1084,8 +1155,8 @@ function loadChordData(data) {
   baseKey   = data.key        || '';
   transposeSteps  = 0;
   offsetSeconds   = 0;
-  currentBeatIdx  = -1;
-  currentChordIdx = -1;
+  currentBeatIdx  = SYNC_UNSET;
+  currentChordIdx = SYNC_UNSET;
   document.getElementById('scKeyBadge').textContent = `Key: ${baseKey}`;
   document.getElementById('scBpmBadge').textContent = `BPM: ${bpm}`;
   document.getElementById('scTransposeLabel').textContent = 'Original';
@@ -1094,14 +1165,10 @@ function loadChordData(data) {
   const vc = document.getElementById('scVersionControls');
   if (vc) vc.style.display = 'flex';
   renderTimeline();
-  if (beatChords.length > 0) setCardContent(0);
   showChords();
 
   videoEl = findVideoElement();
-  // Restart video from the beginning so chords sync from start
-  if (videoEl) {
-    videoEl.currentTime = 0;
-  }
+  applyChordDisplayFromVideoTime(videoEl ? videoEl.currentTime : 0);
   startTracking();
 
   // Populate version dropdown

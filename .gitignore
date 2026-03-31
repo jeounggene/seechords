@@ -1,6 +1,6 @@
 .DS_Store
 .venv/
-.cursor/
+.cursor/    
 .claude/
 __pycache__/
 *.py[cod]
@@ -16,7 +16,20 @@ training/models/*.pkl
 # Regenerated feature caches (run prepare_data to rebuild)
 training/data/*.npz
 
-# Audio datasets (often GBs; keep local only — not for GitHub)
-training/data/**/*.wav
-training/data/**/audio/
-training/data/**/*.mp3
+# BTC model checkpoints (downloaded from ChordMini, too large for git)
+server/btc_model/*.pt
+server/btc_model/*.pth
+
+# Training model checkpoints (large; use Releases or external storage)
+training/models/*.pt
+
+# Audio files (not redistributable)
+training/data/*/audio/
+
+# Uploaded audio (ephemeral)
+server/uploads/*.m4a
+server/uploads/*.mp3
+server/uploads/*.wav
+
+# Training logs (reproducible from training scripts)
+training/logs/*.log

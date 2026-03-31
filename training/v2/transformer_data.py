@@ -48,7 +48,26 @@ def load_data(npz_path, gold_only=False, feature_dim=24):
     data = np.load(npz_path, allow_pickle=True)
 
     X_12 = data['X_12'].astype(np.float32)      # (n_beats, 12)
-    X_48 = data['X_48'].astype(np.float32)       # (n_beats, 48)
+    # v2.prepare_data stores context (+ optional delta/bass) as X_36, X_48, or X_60.
+    # Transformer paths expect a 48-wide block (36-dim temporal ctx + 12-dim bass HPCP).
+    if 'X_48' in data:
+        X_48 = data['X_48'].astype(np.float32)
+    elif 'X_36' in data:
+        x36 = data['X_36'].astype(np.float32)
+        n = x36.shape[0]
+        pad = np.zeros((n, 12), dtype=np.float32)
+        X_48 = np.hstack([x36, pad])
+    elif 'X_60' in data:
+        x60 = data['X_60'].astype(np.float32)
+        if x60.shape[1] < 48:
+            raise ValueError(f'X_60 has width {x60.shape[1]}; need >= 48 for Transformer')
+        X_48 = x60[:, :48].astype(np.float32)
+    else:
+        raise KeyError(
+            'features npz must contain X_48, X_36, or X_60. '
+            'Rebuild with: python -m v2.prepare_data ... --bass '
+            '(recommended for 48-dim bass columns).'
+        )
 
     if feature_dim == 24:
         bass = X_48[:, 36:48]                     # (n_beats, 12) — last 12 cols
@@ -68,10 +87,18 @@ def load_data(npz_path, gold_only=False, feature_dim=24):
         norms[norms == 0] = 1.0
         X_hpcp = X_hpcp / norms
         X = np.hstack([X_hpcp, X_tr])              # (n_beats, 72)
+    elif feature_dim == 144:
+        if 'X_cqt' in data:
+            X = data['X_cqt'].astype(np.float32)      # (n_beats, 144) — beat-synced CQT
+        else:
+            raise KeyError(
+                'features npz must contain X_cqt for feature_dim=144. '
+                'Rebuild with: python -m v2.prepare_data ... --cqt'
+            )
     else:
-        raise ValueError(f"feature_dim must be 24, 48, 60, or 72, got {feature_dim}")
+        raise ValueError(f"feature_dim must be 24, 48, 60, 72, or 144, got {feature_dim}")
 
-    if feature_dim != 72:
+    if feature_dim not in (72, 144):
         # L2 normalize per beat (72-dim handles normalization above)
         norms = np.linalg.norm(X, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
@@ -205,11 +232,15 @@ def _pitch_shift(X, roots, q3, t1, shift, feature_dim):
         return X, roots, q3, t1
 
     X_shifted = X.copy()
-    # Roll each group of 12 chroma dims
-    for start in range(0, feature_dim, 12):
-        end = min(start + 12, feature_dim)
-        if end - start == 12:
-            X_shifted[:, start:end] = np.roll(X[:, start:end], shift, axis=1)
+    if feature_dim == 144:
+        # CQT: roll by bins_per_semitone (2 bins per semitone for 24 bins/octave)
+        X_shifted = np.roll(X, shift * 2, axis=1)
+    else:
+        # HPCP: roll each group of 12 chroma dims
+        for start in range(0, feature_dim, 12):
+            end = min(start + 12, feature_dim)
+            if end - start == 12:
+                X_shifted[:, start:end] = np.roll(X[:, start:end], shift, axis=1)
 
     # Shift root: 0=N stays, 1-12 shift circularly
     roots_shifted = roots.copy()
