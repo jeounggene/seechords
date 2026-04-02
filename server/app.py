@@ -1668,6 +1668,11 @@ def privacy_policy():
         return f.read()
 
 
+@app.route('/report-bug')
+def report_bug():
+    return render_template('report_bug.html')
+
+
 @app.route('/ingest')
 def ingest_page():
     """Serve the chord sheet ingest + review UI."""
