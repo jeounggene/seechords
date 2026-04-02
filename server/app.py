@@ -1670,6 +1670,7 @@ def privacy_policy():
 
 @app.route('/report-bug')
 def report_bug():
+    """Bug report and feature request form for the SeeChords extension."""
     return render_template('report_bug.html')
 
 

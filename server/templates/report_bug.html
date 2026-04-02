@@ -184,6 +184,7 @@
     typeEl.addEventListener('change', function () {
       stepsRow.style.display = this.value === 'bug' ? 'block' : 'none';
     });
+    typeEl.dispatchEvent(new Event('change'));
 
     document.getElementById('bug-form').addEventListener('submit', function (e) {
       e.preventDefault();
