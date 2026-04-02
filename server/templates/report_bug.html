@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Report a bug or request a feature for SeeChords.">
+  <title>Report a Bug — SeeChords</title>
+  <style>
+    :root {
+      --bg: #080812;
+      --bg-card: #12122a;
+      --border: #2a2a50;
+      --accent: #6c47ff;
+      --accent-hover: #8264ff;
+      --text: #f0f0f8;
+      --muted: #8888aa;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    a { color: var(--accent-hover); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    header {
+      padding: 28px 0 48px;
+      background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.43em;
+      margin-bottom: 12px;
+      font-size: clamp(1.75rem, 4vw, 2.25rem);
+    }
+    .brand-logo {
+      width: 1.5556em;
+      height: 1.5556em;
+      flex-shrink: 0;
+      border-radius: 0.214em;
+      object-fit: contain;
+      display: block;
+    }
+    .logo {
+      font-size: 1em;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: #fff;
+      margin-bottom: 0;
+    }
+    .tagline {
+      font-size: 1.15rem;
+      color: var(--muted);
+      max-width: 36em;
+    }
+    main { padding: 48px 0 64px; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 32px;
+      max-width: 600px;
+    }
+    label {
+      display: block;
+      font-size: 0.9rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+      margin-top: 20px;
+    }
+    label:first-child { margin-top: 0; }
+    input, select, textarea {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    textarea { resize: vertical; min-height: 90px; }
+    select option { background: #12122a; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 22px;
+      border-radius: 999px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      font-family: inherit;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      margin-top: 24px;
+    }
+    .btn-primary:hover { background: var(--accent-hover); text-decoration: none; }
+    #steps-row { display: block; }
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 28px 0 40px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    footer .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
+    footer nav { display: flex; gap: 20px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <div class="brand">
+        <img class="brand-logo" src="{{ url_for('static', filename='icon128.png') }}" alt="SeeChords" width="128" height="128" />
+        <p class="logo">SeeChords</p>
+      </div>
+      <p class="tagline">Found a bug or have an idea? Let us know.</p>
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <div class="card">
+        <form id="bug-form">
+          <label for="type">Type</label>
+          <select id="type" name="type">
+            <option value="bug">Bug report</option>
+            <option value="feature">Feature request</option>
+          </select>
+
+          <label for="description">Description <span style="color:var(--accent)">*</span></label>
+          <textarea id="description" name="description" placeholder="What happened? What did you expect?" required></textarea>
+
+          <div id="steps-row">
+            <label for="steps">Steps to reproduce</label>
+            <textarea id="steps" name="steps" placeholder="1. Open YouTube&#10;2. ..."></textarea>
+          </div>
+
+          <label for="yt-url">YouTube URL (if applicable)</label>
+          <input id="yt-url" name="yt_url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+
+          <label for="browser">Browser / OS</label>
+          <input id="browser" name="browser" type="text" />
+
+          <label for="version">Extension version (if known)</label>
+          <input id="version" name="version" type="text" placeholder="e.g. 1.1" />
+
+          <button class="btn btn-primary" type="submit">Open GitHub Issue</button>
+        </form>
+      </div>
+    </div>
+  </main>
+  <footer>
+    <div class="wrap">
+      <p>SeeChords extension · API at <a href="https://seechords.fly.dev/api/health">seechords.fly.dev</a></p>
+      <nav>
+        <a href="/privacy">Privacy</a>
+        <a href="/report-bug">Report a bug</a>
+      </nav>
+    </div>
+  </footer>
+  <script>
+    // Pre-fill browser/OS from user agent
+    document.getElementById('browser').value = navigator.userAgent;
+
+    // Toggle steps field visibility based on type
+    const typeEl = document.getElementById('type');
+    const stepsRow = document.getElementById('steps-row');
+    typeEl.addEventListener('change', function () {
+      stepsRow.style.display = this.value === 'bug' ? 'block' : 'none';
+    });
+
+    document.getElementById('bug-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+
+      const type = document.getElementById('type').value;
+      const description = document.getElementById('description').value.trim();
+      const steps = document.getElementById('steps').value.trim();
+      const ytUrl = document.getElementById('yt-url').value.trim();
+      const browser = document.getElementById('browser').value.trim();
+      const version = document.getElementById('version').value.trim();
+
+      if (!description) return;
+
+      const prefix = type === 'bug' ? '[Bug]' : '[Feature]';
+      const firstLine = description.split('\n')[0].slice(0, 80);
+      const title = prefix + ' ' + firstLine;
+
+      let body = '';
+      if (type === 'bug') {
+        body += '## Bug Report\n\n';
+      } else {
+        body += '## Feature Request\n\n';
+      }
+
+      body += '**Description**\n' + description + '\n\n';
+
+      if (type === 'bug' && steps) {
+        body += '**Steps to reproduce**\n' + steps + '\n\n';
+      }
+
+      if (ytUrl) {
+        body += '**YouTube URL**\n' + ytUrl + '\n\n';
+      }
+
+      if (browser) {
+        body += '**Browser / OS**\n' + browser + '\n\n';
+      }
+
+      if (version) {
+        body += '**Extension version**\n' + version + '\n\n';
+      }
+
+      const url = 'https://github.com/jeounggene/seechords/issues/new'
+        + '?title=' + encodeURIComponent(title)
+        + '&body=' + encodeURIComponent(body);
+
+      window.open(url, '_blank');
+    });
+  </script>
+</body>
+</html>
