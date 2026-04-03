@@ -1069,16 +1069,152 @@ function initPlayer(data) {
 
 }
 
-function renderTimeline() { /* implemented in Task 6 */ }
-function refreshDisplay() { /* implemented in Task 6 */ }
+function setCardContent(bci) {
+  [
+    { nameId: 'prevName',   diagId: 'prevDiag',   i: bci - 1 },
+    { nameId: 'activeName', diagId: 'activeDiag', i: bci     },
+    { nameId: 'nextName',   diagId: 'nextDiag',   i: bci + 1 },
+  ].forEach(({ nameId, diagId, i }) => {
+    const nameEl = document.getElementById(nameId);
+    const diagEl = document.getElementById(diagId);
+    if (!nameEl || !diagEl) return;
+    const bc = beatChords[i];
+    if (!bc || bc.chord === 'N') {
+      nameEl.innerHTML = bc ? 'N' : '';
+      diagEl.innerHTML = '';
+    } else {
+      const ch = transposeChord(bc.chord, transposeSteps);
+      nameEl.innerHTML = formatChordHTML(ch);
+      diagEl.innerHTML = buildChordSVG(ch);
+    }
+  });
+}
+
+function applyFromAudioTime(t) {
+  const bi  = findBeatAt(t);
+  const bci = findBeatChordAt(t);
+
+  if (bi !== currentBeatIdx) {
+    currentBeatIdx = bi;
+    document.querySelectorAll('#tlRow .tl-beat:not(.empty)').forEach((el, idx) => {
+      el.classList.toggle('active', bi >= 0 && idx === bi);
+    });
+    const active = document.querySelector('#tlRow .tl-beat.active');
+    if (active) {
+      const wrap = document.getElementById('timelineWrap');
+      if (wrap) {
+        const wRect = wrap.getBoundingClientRect();
+        const eRect = active.getBoundingClientRect();
+        const target = wrap.scrollLeft + (eRect.left - wRect.left) - (wRect.width / 2) + (eRect.width / 2);
+        wrap.scrollTo({ left: target, behavior: 'smooth' });
+      }
+    }
+  }
+
+  if (bci !== currentChordIdx) {
+    currentChordIdx = bci;
+    setCardContent(bci);
+  }
+}
+
+const PX_PER_BEAT = 68;
+const EDGE_BEATS  = 14;
+
+function renderTimeline() {
+  const row  = document.getElementById('tlRow');
+  const wrap = document.getElementById('timelineWrap');
+  if (!row || !beatTimes.length) return;
+  row.innerHTML = '';
+
+  const tlHalf = Math.ceil((wrap ? wrap.offsetWidth : 400) / 2 / PX_PER_BEAT);
+  const beatToGroup = new Array(beatTimes.length).fill(-1);
+  beatChords.forEach((bc, gi) => {
+    for (let b = bc.beatStart; b < bc.beatStart + bc.beatCount; b++) beatToGroup[b] = gi;
+  });
+
+  const makePad = () => { const d = document.createElement('div'); d.className = 'tl-pad'; return d; };
+  const makeEmpty = () => {
+    const d = document.createElement('div');
+    d.className = 'tl-beat empty';
+    d.setAttribute('aria-hidden', 'true');
+    return d;
+  };
+
+  for (let p = 0; p < tlHalf; p++) row.appendChild(makePad());
+  for (let e = 0; e < EDGE_BEATS; e++) row.appendChild(makeEmpty());
+
+  beatTimes.forEach((_, bi) => {
+    const div = document.createElement('div');
+    div.className = 'tl-beat';
+    if (bi % 4 === 0) div.classList.add('measure-start');
+    div.dataset.bi = bi;
+
+    const gi = beatToGroup[bi];
+    const bc = beatChords[gi];
+    if (bc && bc.beatStart === bi) {
+      const name = document.createElement('span');
+      if (bc.chord === 'N') {
+        name.className = 'beat-name beat-n';
+        name.textContent = 'N';
+      } else {
+        name.className = 'beat-name';
+        name.innerHTML = formatChordHTML(transposeChord(bc.chord, transposeSteps));
+      }
+      div.appendChild(name);
+    }
+
+    div.addEventListener('click', () => {
+      if (audioEl) {
+        audioEl.currentTime = beatTimes[bi];
+        audioEl.play().catch(err => console.warn('Playback blocked:', err));
+      }
+    });
+    row.appendChild(div);
+  });
+
+  for (let e = 0; e < EDGE_BEATS; e++) row.appendChild(makeEmpty());
+  for (let p = 0; p < tlHalf; p++) row.appendChild(makePad());
+}
+
+function refreshDisplay() {
+  const capo = transposeSteps < 0 ? Math.abs(transposeSteps) : 0;
+  const lbl  = transposeSteps === 0 ? 'Original'
+    : (transposeSteps > 0 ? `▲${transposeSteps}` : `▼${Math.abs(transposeSteps)} (Capo ${capo})`);
+  const lblEl = document.getElementById('transpLabel');
+  if (lblEl) lblEl.textContent = lbl;
+
+  const keyEl = document.getElementById('keyBadge');
+  if (keyEl && baseKey) keyEl.textContent = `Key: ${transposeChord(baseKey, transposeSteps)}`;
+
+  // Re-label beat blocks
+  document.querySelectorAll('#tlRow .beat-name').forEach(nameEl => {
+    const bi = +nameEl.closest('.tl-beat').dataset.bi;
+    const gi = beatChords.findIndex(bc => bc.beatStart === bi);
+    if (gi < 0) return;
+    const ch = beatChords[gi].chord;
+    if (ch === 'N') {
+      nameEl.classList.add('beat-n');
+      nameEl.textContent = 'N';
+    } else {
+      nameEl.classList.remove('beat-n');
+      nameEl.innerHTML = formatChordHTML(transposeChord(ch, transposeSteps));
+    }
+  });
+
+  if (currentChordIdx >= 0) setCardContent(currentChordIdx);
+}
+
 function startTracking() {
   stopTracking();
+  currentBeatIdx  = -999;
+  currentChordIdx = -999;
   function loop() {
     if (audioEl && !audioEl.paused) {
       if (seekBarEl && !seekBarEl._seeking) {
         seekBarEl.value = audioEl.currentTime;
         if (timeDispEl) timeDispEl.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration || 0)}`;
       }
+      applyFromAudioTime(audioEl.currentTime);
     }
     rafId = requestAnimationFrame(loop);
   }
