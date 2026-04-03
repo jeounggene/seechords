@@ -108,12 +108,13 @@
 .player {
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - 57px); /* subtract header */
+  height: calc(100dvh - 68px); /* subtract .header height (16px top + ~35px logo + 16px bottom + 1px border) */
   overflow: hidden;
 }
 
 /* ── Song header bar ── */
 .player-header {
+  flex-shrink: 0;
   padding: 10px 16px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
