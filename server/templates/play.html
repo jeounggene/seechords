@@ -648,6 +648,13 @@
   .nf-thumb-wrap { order: 4; margin-top: 8px; margin-bottom: 0; }
   .nf-icon    { display: none; }
 }
+/* Portrait phones only — safe-area top padding for Dynamic Island / notch */
+@media (max-width: 768px) and (orientation: portrait) {
+  .player-title-row {
+    padding-top: max(8px, env(safe-area-inset-top, 8px));
+    background: linear-gradient(to bottom, #110d2e 0%, rgba(17,13,46,0) 100%);
+  }
+}
 /* Larger tap targets only on non-mobile coarse devices (e.g. tablets in landscape) */
 @media (pointer: coarse) and (min-width: 769px) and (min-height: 600px) {
   .tl-beat { width: 76px; }
