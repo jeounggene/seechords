@@ -2003,23 +2003,14 @@ function initPlayer(data) {
   const _isMobileBar = () => window.matchMedia('(max-width: 768px), (max-height: 500px) and (orientation: landscape)').matches;
   let _barHideTimer = null;
   const _seekRow = document.getElementById('audioSeekRow');
-  let _seekRowFadeTimer = null;
   function _hideBarElements() {
     audioCtrl.classList.add('bar-hidden');
-    if (_seekRow) {
-      _seekRow.style.opacity = '0';
-      clearTimeout(_seekRowFadeTimer);
-      _seekRowFadeTimer = setTimeout(() => { if (_seekRow) _seekRow.style.display = 'none'; }, 300);
-    }
+    if (_seekRow) { _seekRow.style.opacity = '0'; _seekRow.style.pointerEvents = 'none'; }
   }
   function _showBar() {
     if (!_isMobileBar()) return;
     audioCtrl.classList.remove('bar-hidden');
-    clearTimeout(_seekRowFadeTimer);
-    if (_seekRow) {
-      _seekRow.style.display = '';
-      requestAnimationFrame(() => { if (_seekRow) _seekRow.style.opacity = ''; });
-    }
+    if (_seekRow) { _seekRow.style.opacity = ''; _seekRow.style.pointerEvents = ''; }
     clearTimeout(_barHideTimer);
     _barHideTimer = setTimeout(() => { if (_isMobileBar()) _hideBarElements(); }, 3000);
   }
