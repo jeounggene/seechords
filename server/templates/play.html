@@ -685,6 +685,7 @@
   flex: 1;
   min-width: 0;
   transition: opacity 0.3s;
+  will-change: opacity;
 }
 .audio-play-btn {
   background: rgba(108,71,255,.18);
@@ -718,11 +719,11 @@
 }
 /* CSS pause bars — shown when button has .playing class */
 .audio-play-btn.playing::before {
-  width: 5px;
-  height: 9px;
+  width: 7px;
+  height: 10px;
   border-style: none;
-  border-left: 2px solid #fff;
-  border-right: 2px solid #fff;
+  border-left: 3px solid #fff;
+  border-right: 3px solid #fff;
   margin-left: 0;
 }
 .audio-play-btn:hover, .audio-play-btn:active {
