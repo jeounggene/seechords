@@ -169,6 +169,7 @@
   align-items: center;
   justify-content: center;
   transition: color .15s, background .15s;
+  touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 .ctrl-btn:hover, .ctrl-btn:active { color: var(--text); background: var(--border); }
@@ -366,7 +367,7 @@
 
 <header class="header">
   <a href="/" class="brand">
-    <img class="brand-logo" src="/static/icon128.png" alt="SeeChords" width="128" height="128">
+    <img class="brand-logo" src="{{ url_for('static', filename='icon128.png') }}" alt="SeeChords" width="128" height="128">
     <span class="brand-name">SeeChords</span>
   </a>
   <span class="header-sub">Web Player</span>
