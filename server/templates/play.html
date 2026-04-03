@@ -970,7 +970,13 @@ function showError(msg) {
 
 // ── Status polling ───────────────────────────────────────────
 function pollStatus(jobId) {
+  let polls = 0;
   const interval = setInterval(async () => {
+    if (++polls > 150) {
+      clearInterval(interval);
+      showError('Analysis timed out. Please try again.');
+      return;
+    }
     try {
       const res = await fetch(`/api/status/${jobId}`);
       const data = await res.json();
@@ -1018,14 +1024,16 @@ function initPlayer(data) {
 
   // Badges
   document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
-  document.getElementById('bpmBadge').textContent = `BPM: ${bpm}`;
+  document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
 
   // Audio element — plays from browser memory via File API
   audioEl = new Audio();
   const blobUrl = URL.createObjectURL(audioFile);
   audioEl.src = blobUrl;
   audioEl.preload = 'auto';
-  audioEl.addEventListener('ended', () => URL.revokeObjectURL(blobUrl), { once: true });
+  const revoke = () => URL.revokeObjectURL(blobUrl);
+  audioEl.addEventListener('ended', revoke, { once: true });
+  window.addEventListener('pagehide', revoke, { once: true });
 
   // Seek bar sync
   seekBarEl = document.getElementById('seekBar');
@@ -1050,9 +1058,9 @@ function initPlayer(data) {
   playBtn.addEventListener('click', () => {
     if (audioEl.paused) { audioEl.play().catch(err => console.warn('Playback blocked:', err)); } else { audioEl.pause(); }
   });
-  audioEl.addEventListener('play',  () => { playBtn.textContent = '⏸'; startTracking(); });
-  audioEl.addEventListener('pause', () => { playBtn.textContent = '▶'; stopTracking(); });
-  audioEl.addEventListener('ended', () => { playBtn.textContent = '▶'; stopTracking(); });
+  audioEl.addEventListener('play',  () => { playBtn.textContent = '⏸'; playBtn.setAttribute('aria-label', 'Pause'); startTracking(); });
+  audioEl.addEventListener('pause', () => { playBtn.textContent = '▶'; playBtn.setAttribute('aria-label', 'Play');  stopTracking(); });
+  audioEl.addEventListener('ended', () => { playBtn.textContent = '▶'; playBtn.setAttribute('aria-label', 'Play');  stopTracking(); });
 
   // Transpose buttons
   document.getElementById('transpDown').addEventListener('click', () => {
