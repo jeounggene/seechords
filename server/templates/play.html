@@ -678,6 +678,14 @@
   width: 100%;
   max-width: 640px;
 }
+.audio-seekrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  transition: opacity 0.3s;
+}
 .audio-play-btn {
   background: rgba(108,71,255,.18);
   border: 1px solid rgba(108,71,255,.4);
@@ -1562,8 +1570,10 @@ function buildPlayerHTML(title) {
       <div class="audio-ctrl">
         <div class="audio-row">
           <button class="audio-play-btn" id="audioPlayBtn" aria-label="Play" type="button"></button>
+          <div class="audio-seekrow" id="audioSeekRow">
           <input class="audio-seek" id="audioSeek" type="range" min="0" max="100" step="0.1" value="0">
           <span class="audio-time" id="audioTime">0:00 / 0:00</span>
+          </div>
         </div>
         <span class="audio-loading" id="audioLoading">Loading…</span>
       </div>
@@ -1992,17 +2002,24 @@ function initPlayer(data) {
   // ── Auto-hide bar on mobile ──
   const _isMobileBar = () => window.matchMedia('(max-width: 768px), (max-height: 500px) and (orientation: landscape)').matches;
   let _barHideTimer = null;
-  const _timeEl = document.getElementById('audioTime');
+  const _seekRow = document.getElementById('audioSeekRow');
+  let _seekRowFadeTimer = null;
   function _hideBarElements() {
     audioCtrl.classList.add('bar-hidden');
-    if (_timeEl) _timeEl.style.display = 'none';
-    seekEl.style.display = 'none';
+    if (_seekRow) {
+      _seekRow.style.opacity = '0';
+      clearTimeout(_seekRowFadeTimer);
+      _seekRowFadeTimer = setTimeout(() => { if (_seekRow) _seekRow.style.display = 'none'; }, 300);
+    }
   }
   function _showBar() {
     if (!_isMobileBar()) return;
     audioCtrl.classList.remove('bar-hidden');
-    if (_timeEl) _timeEl.style.display = '';
-    seekEl.style.display = '';
+    clearTimeout(_seekRowFadeTimer);
+    if (_seekRow) {
+      _seekRow.style.display = '';
+      requestAnimationFrame(() => { if (_seekRow) _seekRow.style.opacity = ''; });
+    }
     clearTimeout(_barHideTimer);
     _barHideTimer = setTimeout(() => { if (_isMobileBar()) _hideBarElements(); }, 3000);
   }
