@@ -409,6 +409,8 @@ let transposeSteps = 0;
 let currentBeatIdx  = -999;
 let currentChordIdx = -999;
 let rafId = null;
+let seekBarEl = null;
+let timeDispEl = null;
 
 // ── Phase switching ──────────────────────────────────────────
 function showPhase(name) {
@@ -998,10 +1000,11 @@ function formatTime(sec) {
 }
 
 function escapeHTML(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
 }
 
 function initPlayer(data) {
+  transposeSteps = 0;
   chords    = data.chords    || [];
   beatTimes = data.beat_times || [];
   baseKey   = data.key       || '';
@@ -1018,29 +1021,33 @@ function initPlayer(data) {
 
   // Audio element — plays from browser memory via File API
   audioEl = new Audio();
-  audioEl.src = URL.createObjectURL(audioFile);
+  const blobUrl = URL.createObjectURL(audioFile);
+  audioEl.src = blobUrl;
   audioEl.preload = 'auto';
+  audioEl.addEventListener('ended', () => URL.revokeObjectURL(blobUrl), { once: true });
 
   // Seek bar sync
-  const seekBar  = document.getElementById('seekBar');
-  const timeDisp = document.getElementById('timeDisplay');
+  seekBarEl = document.getElementById('seekBar');
+  timeDispEl = document.getElementById('timeDisplay');
+  const seekBar  = seekBarEl;
+  const timeDisp = timeDispEl;
 
   audioEl.addEventListener('loadedmetadata', () => {
     seekBar.max = audioEl.duration;
     timeDisp.textContent = `0:00 / ${formatTime(audioEl.duration)}`;
   });
 
-  let userSeeking = false;
-  seekBar.addEventListener('input', () => { userSeeking = true; });
+  seekBar._seeking = false;
+  seekBar.addEventListener('input', () => { seekBar._seeking = true; });
   seekBar.addEventListener('change', () => {
     audioEl.currentTime = parseFloat(seekBar.value);
-    userSeeking = false;
+    seekBar._seeking = false;
   });
 
   // Play/pause button
   const playBtn = document.getElementById('playBtn');
   playBtn.addEventListener('click', () => {
-    if (audioEl.paused) { audioEl.play(); } else { audioEl.pause(); }
+    if (audioEl.paused) { audioEl.play().catch(err => console.warn('Playback blocked:', err)); } else { audioEl.pause(); }
   });
   audioEl.addEventListener('play',  () => { playBtn.textContent = '⏸'; startTracking(); });
   audioEl.addEventListener('pause', () => { playBtn.textContent = '▶'; stopTracking(); });
@@ -1060,20 +1067,23 @@ function initPlayer(data) {
   renderTimeline();
   refreshDisplay();
 
-  // rAF loop for seek bar + time display while playing
+}
+
+function renderTimeline() { /* implemented in Task 6 */ }
+function refreshDisplay() { /* implemented in Task 6 */ }
+function startTracking() {
+  stopTracking();
   function loop() {
-    if (audioEl && !audioEl.paused && !userSeeking) {
-      seekBar.value = audioEl.currentTime;
-      timeDisp.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration || 0)}`;
+    if (audioEl && !audioEl.paused) {
+      if (seekBarEl && !seekBarEl._seeking) {
+        seekBarEl.value = audioEl.currentTime;
+        if (timeDispEl) timeDispEl.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration || 0)}`;
+      }
     }
     rafId = requestAnimationFrame(loop);
   }
   rafId = requestAnimationFrame(loop);
 }
-
-function renderTimeline() { /* implemented in Task 6 */ }
-function refreshDisplay() { /* implemented in Task 6 */ }
-function startTracking() { /* implemented in Task 6 */ }
 function stopTracking() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
 </script>
 </body>
