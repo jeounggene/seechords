@@ -992,10 +992,89 @@ function pollStatus(jobId) {
 }
 
 // ── Player initialization (Task 5) ──────────────────────────
-function initPlayer(data) {
-  // Implemented in Task 5
-  console.log('Analysis complete', data);
+function formatTime(sec) {
+  const s = Math.floor(sec), m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
+
+function escapeHTML(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function initPlayer(data) {
+  chords    = data.chords    || [];
+  beatTimes = data.beat_times || [];
+  baseKey   = data.key       || '';
+  bpm       = data.bpm       || 120;
+  beatChords = buildBeatChords();
+
+  const title = data.title || (audioFile ? audioFile.name : 'Unknown');
+  document.getElementById('playerPhase').innerHTML = buildPlayerHTML(escapeHTML(title));
+  showPhase('player');
+
+  // Badges
+  document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
+  document.getElementById('bpmBadge').textContent = `BPM: ${bpm}`;
+
+  // Audio element — plays from browser memory via File API
+  audioEl = new Audio();
+  audioEl.src = URL.createObjectURL(audioFile);
+  audioEl.preload = 'auto';
+
+  // Seek bar sync
+  const seekBar  = document.getElementById('seekBar');
+  const timeDisp = document.getElementById('timeDisplay');
+
+  audioEl.addEventListener('loadedmetadata', () => {
+    seekBar.max = audioEl.duration;
+    timeDisp.textContent = `0:00 / ${formatTime(audioEl.duration)}`;
+  });
+
+  let userSeeking = false;
+  seekBar.addEventListener('input', () => { userSeeking = true; });
+  seekBar.addEventListener('change', () => {
+    audioEl.currentTime = parseFloat(seekBar.value);
+    userSeeking = false;
+  });
+
+  // Play/pause button
+  const playBtn = document.getElementById('playBtn');
+  playBtn.addEventListener('click', () => {
+    if (audioEl.paused) { audioEl.play(); } else { audioEl.pause(); }
+  });
+  audioEl.addEventListener('play',  () => { playBtn.textContent = '⏸'; startTracking(); });
+  audioEl.addEventListener('pause', () => { playBtn.textContent = '▶'; stopTracking(); });
+  audioEl.addEventListener('ended', () => { playBtn.textContent = '▶'; stopTracking(); });
+
+  // Transpose buttons
+  document.getElementById('transpDown').addEventListener('click', () => {
+    transposeSteps = Math.max(-11, transposeSteps - 1);
+    refreshDisplay();
+  });
+  document.getElementById('transpUp').addEventListener('click', () => {
+    transposeSteps = Math.min(11, transposeSteps + 1);
+    refreshDisplay();
+  });
+
+  // Render timeline + initial card state
+  renderTimeline();
+  refreshDisplay();
+
+  // rAF loop for seek bar + time display while playing
+  function loop() {
+    if (audioEl && !audioEl.paused && !userSeeking) {
+      seekBar.value = audioEl.currentTime;
+      timeDisp.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration || 0)}`;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+  rafId = requestAnimationFrame(loop);
+}
+
+function renderTimeline() { /* implemented in Task 6 */ }
+function refreshDisplay() { /* implemented in Task 6 */ }
+function startTracking() { /* implemented in Task 6 */ }
+function stopTracking() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
 </script>
 </body>
 </html>
