@@ -222,6 +222,7 @@ function showError(msg) {
   document.getElementById('progErr').textContent = msg;
   document.getElementById('progErr').style.display = '';
   document.getElementById('progMsg').textContent = 'Analysis failed.';
+  setTimeout(() => showPhase('upload'), 4000);
 }
 
 // ── Status polling ───────────────────────────────────────────
@@ -240,6 +241,9 @@ function pollStatus(jobId) {
       } else if (data.status === 'error') {
         clearInterval(interval);
         showError(data.message || 'Analysis failed.');
+      } else if (data.status === 'not_found') {
+        clearInterval(interval);
+        showError('Job not found. Please try uploading again.');
       }
     } catch (err) {
       // network blip — keep polling
