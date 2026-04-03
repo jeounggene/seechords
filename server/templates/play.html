@@ -159,6 +159,99 @@ function showPhase(name) {
   document.getElementById('progressPhase').style.display = name === 'progress' ? '' : 'none';
   document.getElementById('playerPhase').style.display   = name === 'player'   ? '' : 'none';
 }
+
+// ── Random 11-char videoId (must match ^[a-zA-Z0-9_-]{11}$) ──
+function randomVideoId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  return Array.from({length: 11}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
+
+// ── Upload zone wiring ────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+document.getElementById('pickBtn').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) startUpload(fileInput.files[0]);
+});
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) startUpload(f);
+});
+
+// ── Upload handler ───────────────────────────────────────────
+async function startUpload(file) {
+  audioFile = file;
+  showPhase('progress');
+  document.getElementById('progFile').textContent = file.name;
+  document.getElementById('progMsg').textContent = 'Uploading…';
+  setProg(5);
+
+  const videoId = randomVideoId();
+  const title = file.name.replace(/\.[^.]+$/, '').slice(0, 120) || 'Uploaded Audio';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('videoId', videoId);
+  fd.append('title', title);
+
+  let jobId;
+  try {
+    const res = await fetch('/api/analyze', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Upload failed');
+    jobId = data.job_id;
+  } catch (err) {
+    showError(err.message);
+    return;
+  }
+
+  pollStatus(jobId);
+}
+
+function setProg(pct) {
+  document.getElementById('progFill').style.width = pct + '%';
+}
+
+function showError(msg) {
+  document.getElementById('progErr').textContent = msg;
+  document.getElementById('progErr').style.display = '';
+  document.getElementById('progMsg').textContent = 'Analysis failed.';
+}
+
+// ── Status polling ───────────────────────────────────────────
+function pollStatus(jobId) {
+  const interval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/status/${jobId}`);
+      const data = await res.json();
+
+      setProg(data.progress || 0);
+      document.getElementById('progMsg').textContent = data.message || '';
+
+      if (data.status === 'done') {
+        clearInterval(interval);
+        initPlayer(data);
+      } else if (data.status === 'error') {
+        clearInterval(interval);
+        showError(data.message || 'Analysis failed.');
+      }
+    } catch (err) {
+      // network blip — keep polling
+    }
+  }, 2000);
+}
+
+// ── Player initialization (Task 5) ──────────────────────────
+function initPlayer(data) {
+  // Implemented in Task 5
+  console.log('Analysis complete', data);
+}
 </script>
 </body>
 </html>
