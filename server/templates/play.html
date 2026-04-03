@@ -610,10 +610,7 @@
   }
   .audio-play-btn { width: 34px; height: 34px; font-size: 0.9rem; }
   .audio-row { gap: 8px; }
-  /* Auto-hide seek + timestamp together */
-  .audio-seek, .audio-time { transition: opacity .25s; }
-  .audio-ctrl.bar-hidden .audio-seek,
-  .audio-ctrl.bar-hidden .audio-time { opacity: 0; visibility: hidden; pointer-events: none; }
+  /* Auto-hide seek + timestamp: handled via JS display:none for iOS compositor reliability */
   /* Upload card compact */
   .header { padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top, 10px)); }
   #uploadPhase { margin: 20px auto; }
@@ -1998,14 +1995,14 @@ function initPlayer(data) {
   const _timeEl = document.getElementById('audioTime');
   function _hideBarElements() {
     audioCtrl.classList.add('bar-hidden');
-    if (_timeEl) { _timeEl.style.display = 'none'; }
-    seekEl.style.opacity = '0'; seekEl.style.visibility = 'hidden'; seekEl.style.pointerEvents = 'none';
+    if (_timeEl) _timeEl.style.display = 'none';
+    seekEl.style.display = 'none';
   }
   function _showBar() {
     if (!_isMobileBar()) return;
     audioCtrl.classList.remove('bar-hidden');
-    if (_timeEl) { _timeEl.style.display = ''; }
-    seekEl.style.opacity = ''; seekEl.style.visibility = ''; seekEl.style.pointerEvents = '';
+    if (_timeEl) _timeEl.style.display = '';
+    seekEl.style.display = '';
     clearTimeout(_barHideTimer);
     _barHideTimer = setTimeout(() => { if (_isMobileBar()) _hideBarElements(); }, 3000);
   }
