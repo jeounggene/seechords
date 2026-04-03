@@ -1106,7 +1106,7 @@ function applyFromAudioTime(t) {
         const wRect = wrap.getBoundingClientRect();
         const eRect = active.getBoundingClientRect();
         const target = wrap.scrollLeft + (eRect.left - wRect.left) - (wRect.width / 2) + (eRect.width / 2);
-        wrap.scrollTo({ left: target, behavior: 'smooth' });
+        wrap.scrollTo({ left: target, behavior: 'instant' });
       }
     }
   }
