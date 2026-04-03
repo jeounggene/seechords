@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="SeeChords Player — upload audio and see beat-synced chords">
+  <title>SeeChords Player</title>
+  <style>
+    :root {
+      --bg:           #080812;
+      --bg-card:      #12122a;
+      --bg-input:     #1a1a36;
+      --border:       #2a2a50;
+      --accent:       #6c47ff;
+      --accent-hover: #8264ff;
+      --gold:         #ffd700;
+      --text:         #f0f0f8;
+      --muted:        #8888aa;
+      --radius:       12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      min-height: 100dvh;
+    }
+    a { color: var(--accent-hover); text-decoration: none; }
+
+    /* ── Header ── */
+    .header {
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.43em;
+      font-size: clamp(1.4rem, 3.5vw, 1.8rem);
+      text-decoration: none;
+    }
+    .brand-logo {
+      width: 1.5556em;
+      height: 1.5556em;
+      border-radius: 0.214em;
+      object-fit: contain;
+    }
+    .brand-name { font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+    .header-sub { color: var(--muted); font-size: 0.95rem; margin-left: auto; }
+
+    /* ── Upload Phase ── */
+    #uploadPhase {
+      max-width: 560px;
+      margin: 48px auto;
+      padding: 0 20px;
+    }
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .upload-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(108,71,255,.08);
+    }
+    .upload-icon { font-size: 3rem; margin-bottom: 16px; }
+    .upload-title { font-size: 1.2rem; font-weight: 700; margin-bottom: 8px; }
+    .upload-sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+    .upload-btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 12px 28px;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .upload-btn:hover { background: var(--accent-hover); }
+    #fileInput { display: none; }
+
+    /* ── Progress Phase ── */
+    #progressPhase { display: none; max-width: 560px; margin: 48px auto; padding: 0 20px; }
+    .prog-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 6px; }
+    .prog-file { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .prog-track {
+      height: 8px; background: var(--bg-input); border-radius: 4px; overflow: hidden; margin-bottom: 10px;
+    }
+    .prog-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s ease; width: 0%; }
+    .prog-msg { color: var(--muted); font-size: 0.9rem; }
+    .prog-err { color: #ff6b6b; font-size: 0.9rem; margin-top: 8px; display: none; }
+
+    /* ── Player Phase ── */
+    #playerPhase { display: none; }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <a href="/" class="brand">
+    <img class="brand-logo" src="/static/icon128.png" alt="SeeChords" width="128" height="128">
+    <span class="brand-name">SeeChords</span>
+  </a>
+  <span class="header-sub">Web Player</span>
+</header>
+
+<!-- Phase 1: Upload -->
+<div id="uploadPhase">
+  <div class="upload-zone" id="dropZone">
+    <div class="upload-icon">🎵</div>
+    <div class="upload-title">Drop an audio file</div>
+    <div class="upload-sub">MP3, WAV, M4A, FLAC, AAC, OGG supported</div>
+    <button class="upload-btn" id="pickBtn">Choose File</button>
+    <input type="file" id="fileInput" accept=".mp3,.wav,.m4a,.flac,.aac,.ogg,.webm">
+  </div>
+</div>
+
+<!-- Phase 2: Progress -->
+<div id="progressPhase">
+  <div class="prog-title">Analyzing chords…</div>
+  <div class="prog-file" id="progFile"></div>
+  <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+  <div class="prog-msg" id="progMsg">Uploading…</div>
+  <div class="prog-err" id="progErr"></div>
+</div>
+
+<!-- Phase 3: Player (populated by JS) -->
+<div id="playerPhase"></div>
+
+<script>
+'use strict';
+// State populated after analysis
+let audioFile = null;
+let audioEl   = null;
+let chords    = [];
+let beatTimes = [];
+let beatChords = [];
+let baseKey   = '';
+let bpm       = 120;
+let transposeSteps = 0;
+let currentBeatIdx  = -999;
+let currentChordIdx = -999;
+let rafId = null;
+
+// ── Phase switching ──────────────────────────────────────────
+function showPhase(name) {
+  document.getElementById('uploadPhase').style.display   = name === 'upload'   ? '' : 'none';
+  document.getElementById('progressPhase').style.display = name === 'progress' ? '' : 'none';
+  document.getElementById('playerPhase').style.display   = name === 'player'   ? '' : 'none';
+}
+</script>
+</body>
+</html>

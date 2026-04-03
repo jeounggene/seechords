@@ -1674,6 +1674,12 @@ def report_bug():
     return render_template('report_bug.html')
 
 
+@app.route('/play')
+def play():
+    """Web-based chord player: upload audio, get beat-synced chord display."""
+    return render_template('play.html')
+
+
 @app.route('/ingest')
 def ingest_page():
     """Serve the chord sheet ingest + review UI."""
