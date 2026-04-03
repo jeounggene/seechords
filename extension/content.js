@@ -37,7 +37,7 @@ let overlayResizeTimer = null;
 /** 'overlay' = docked on video (default); 'below' = classic panel under the video */
 let chordViewMode = 'overlay';
 
-const PX_PER_BEAT = 48;
+const PX_PER_BEAT = 68;
 /** Extra beat-width cells before/after the song so first/last chords can scroll to center (intro/outro silence). */
 const TIMELINE_EDGE_BEATS = 14;
 /** Forces first applyChordDisplayFromVideoTime after tracking starts (avoids -1 === -1 skipping UI). */
@@ -47,8 +47,9 @@ const SYNC_UNSET = -999;
 const _ISO_TO_DISPLAY = {
   'maj': '', 'min': 'm', '7': '7', 'maj7': 'maj7', 'min7': 'm7',
   'dim': 'dim', 'dim7': 'dim7', 'hdim7': 'm7b5', 'aug': 'aug',
-  'sus2': 'sus2', 'sus4': 'sus4', '6': '6', 'min6': 'm6', '9': '9',
-  'min9': 'm9', '13': '13', '7b13': '7b13', '7add13': '7add13', '9sus4': '9sus4',
+  'sus2': 'sus2', 'sus4': 'sus4', '6': '6', 'min6': 'm6', 'maj6': '6',
+  'minmaj7': 'mM7', 'aug7': '7#5',
+  '9': '9', 'min9': 'm9', '13': '13', '7b13': '7b13', '7add13': '7add13', '9sus4': '9sus4',
 };
 
 function _isoToDisplay(iso) {
@@ -156,11 +157,63 @@ const CHORD_DIAGRAMS = {
   'Esus4':  { f:[0,2,2,2,0,0],   b:1 },
   'Fsus4':  { f:[1,3,3,3,1,1],   b:1 },
   'F#sus4': { f:[1,3,3,3,1,1],   b:2 },
+  'Gbsus4': { f:[1,3,3,3,1,1],   b:2 },
   'Gsus4':  { f:[3,3,0,0,1,3],   b:1 },
   'Absus4': { f:[1,3,3,3,1,1],   b:4 },
   'Asus4':  { f:[-1,0,2,2,3,0],  b:1 },
   'Bbsus4': { f:[-1,1,3,3,4,1],  b:1 },
   'Bsus4':  { f:[-1,2,4,4,0,0],  b:1 },
+
+  // ── BTC 170-class families: 6, m6, mM7, dim7 (12 roots × 4) ──
+  'C6': { f:[-1,3,2,2,1,0], b:1 },
+  'Cm6': { f:[-1,3,1,2,1,3], b:1 },
+  'CmM7': { f:[-1,3,5,4,5,-1], b:3 },
+  'Cdim7': { f:[-1,3,4,2,4,2], b:2 },
+  'C#6': { f:[-1,4,3,3,2,1], b:1 },
+  'C#m6': { f:[-1,4,2,3,2,4], b:2 },
+  'C#mM7': { f:[-1,4,6,5,6,-1], b:4 },
+  'C#dim7': { f:[-1,4,5,3,5,3], b:3 },
+  'D6': { f:[-1,5,4,4,3,2], b:2 },
+  'Dm6': { f:[-1,5,3,4,3,5], b:3 },
+  'DmM7': { f:[-1,5,7,6,7,-1], b:5 },
+  'Ddim7': { f:[-1,5,6,4,6,4], b:4 },
+  'Eb6': { f:[-1,6,5,5,4,3], b:3 },
+  'Ebm6': { f:[-1,6,4,5,4,6], b:4 },
+  'EbmM7': { f:[-1,6,8,7,8,-1], b:6 },
+  'Ebdim7': { f:[-1,6,7,5,7,5], b:5 },
+  'E6': { f:[-1,7,6,6,5,4], b:4 },
+  'Em6': { f:[-1,7,5,6,5,7], b:5 },
+  'EmM7': { f:[-1,7,9,8,9,-1], b:7 },
+  'Edim7': { f:[-1,7,8,6,8,6], b:6 },
+  'F6': { f:[-1,8,7,7,6,5], b:5 },
+  'Fm6': { f:[-1,8,6,7,6,8], b:6 },
+  'FmM7': { f:[-1,8,10,9,10,-1], b:8 },
+  'Fdim7': { f:[-1,8,9,7,9,7], b:7 },
+  'F#6': { f:[-1,9,8,8,7,6], b:6 },
+  'F#m6': { f:[-1,9,7,8,7,9], b:7 },
+  'F#mM7': { f:[-1,9,11,10,11,-1], b:9 },
+  'F#dim7': { f:[-1,9,10,8,10,8], b:8 },
+  'G6': { f:[-1,10,9,9,8,7], b:7 },
+  'Gm6': { f:[-1,10,8,9,8,10], b:8 },
+  'GmM7': { f:[-1,10,12,11,12,-1], b:10 },
+  'Gdim7': { f:[-1,10,11,9,11,9], b:9 },
+  'Ab6': { f:[-1,11,10,10,9,8], b:8 },
+  'Abm6': { f:[-1,11,9,10,9,11], b:9 },
+  'AbmM7': { f:[-1,4,6,5,6,-1], b:4 },
+  'Abdim7': { f:[-1,11,12,10,12,10], b:10 },
+  'A6': { f:[-1,12,11,11,10,9], b:9 },
+  'Am6': { f:[-1,12,10,11,10,12], b:10 },
+  'AmM7': { f:[-1,0,7,5,5,-1], b:1 },
+  'Adim7': { f:[-1,5,6,5,6,5], b:5 },
+  'Bb6': { f:[-1,6,-1,3,5,3], b:3 },
+  'Bbm6': { f:[-1,6,5,6,5,6], b:5 },
+  'BbmM7': { f:[-1,1,3,2,3,-1], b:1 },
+  'Bbdim7': { f:[-1,6,7,6,7,6], b:6 },
+  'B6': { f:[-1,7,6,6,5,4], b:4 },
+  'Bm6': { f:[-1,7,6,7,6,7], b:6 },
+  'BmM7': { f:[-1,2,4,3,4,-1], b:2 },
+  'Bdim7': { f:[-1,2,3,2,3,2], b:2 },
+
   'Cdim':  { f:[-1,3,4,2,4,-1],  b:1 },
   'C#dim': { f:[-1,-1,2,3,2,3],  b:1 },
   'Ddim':  { f:[-1,-1,0,1,3,1],  b:1 },
@@ -398,7 +451,7 @@ function buildChordSVG(chordName) {
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 0 84 72" width="120" height="128" aria-hidden="true">${p.join('')}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 0 84 72" width="140" height="149" aria-hidden="true">${p.join('')}</svg>`;
 }
 
 // ─── Beat-Chord Building ──────────────────────────────────
@@ -710,7 +763,7 @@ function injectOverlay() {
     <div class="sc-status" id="scStatus"></div>
     <div class="sc-upload-prompt" id="scUploadPrompt" style="display:none;">
       <p class="sc-upload-msg">No chords found for this video.</p>
-      <p class="sc-upload-sub">Run analysis on the SeeChords server (downloads audio with yt-dlp when needed).</p>
+      <p class="sc-upload-sub">Run analysis on SeeChords Server.</p>
       <p class="sc-upload-note">Because it's the first time this song is analyzed, it may take a few minutes.</p>
       <button type="button" class="sc-analyze-btn" id="scAnalyzeServerBtn">Analyze this video</button>
       <div class="sc-progress" id="scProgress" style="display:none;">
@@ -1042,7 +1095,15 @@ function applyChordDisplayFromVideoTime(videoTime) {
       el.classList.toggle('sc-active', bi >= 0 && idx === bi);
     });
     const active = document.querySelector('#scTlRow .sc-beat-block.sc-active');
-    if (active) active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    if (active) {
+      const tl = document.getElementById('scTimeline');
+      if (tl) {
+        const tlRect = tl.getBoundingClientRect();
+        const elRect = active.getBoundingClientRect();
+        const target = tl.scrollLeft + (elRect.left - tlRect.left) - (tlRect.width / 2) + (elRect.width / 2);
+        tl.scrollTo({ left: target, behavior: 'smooth' });
+      }
+    }
   }
 
   if (chordIdx !== currentChordIdx) {
