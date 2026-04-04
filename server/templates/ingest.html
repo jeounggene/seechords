@@ -616,27 +616,60 @@ async function loadSavedVersion(versionId, videoId) {
   document.getElementById('review-section').classList.remove('hidden');
   document.getElementById('playalong-section').classList.remove('hidden');
 
+  const backBadge = document.getElementById('pa-back-badge');
+  if (backBadge) {
+    backBadge.style.display = '';
+    backBadge.onclick = backToHome;
+  }
+
   try {
     const resp = await fetch(API + '/api/version/' + versionId);
     const data = await resp.json();
     if (data.error) { alert(data.error); return; }
 
-    _currentIngestVideoId = videoId;
-    paCurrentVideoId = videoId;
-    initYTPlayerForVideo(videoId);
-
-    const chords = typeof data.chords === 'string' ? JSON.parse(data.chords) : data.chords;
-    currentSegments = chords.map(c => ({
-      start: c.start, end: c.end, chord: c.chord,
-    }));
-
-    // Full wiring happens in Task 7 (initPlayAlongFromVersion)
-    if (typeof initPlayAlongFromVersion === 'function') {
-      initPlayAlongFromVersion(data, videoId);
-    }
+    initPlayAlongFromVersion(data, videoId);
   } catch (e) {
     alert('Error loading version: ' + e.message);
   }
+}
+
+function initPlayAlongFromVersion(data, videoId) {
+  const chords = typeof data.chords === 'string' ? JSON.parse(data.chords) : (data.chords || []);
+  const beats = typeof data.beat_times === 'string' ? JSON.parse(data.beat_times) : (data.beat_times || []);
+
+  currentSegments = chords.map(function(c) {
+    return { start: c.start, end: c.end, chord: c.chord };
+  });
+
+  _currentIngestVideoId = videoId;
+  paCurrentVideoId = videoId;
+  _currentSongName = data.title || data.songName || 'unknown';
+  paBaseKey = data.key || '';
+  paCurrentKey = paBaseKey;
+  _ingestBeatTimes = beats.length ? beats : null;
+  paTransposeSemitones = 0;
+
+  // Update header badges before initPlayAlong reads them
+  var keyBadge = document.getElementById('pa-key-badge');
+  var bpmBadge = document.getElementById('pa-bpm-badge');
+  if (keyBadge) keyBadge.textContent = 'Key: ' + (data.key || '\u2014');
+  if (bpmBadge) bpmBadge.textContent = 'BPM: ' + (data.bpm || '\u2014');
+
+  // Populate info-bar so initPlayAlong fallback reads correct values
+  var infoBar = document.getElementById('info-bar');
+  if (infoBar) {
+    infoBar.innerHTML = '<div><span>Song:</span> <strong>' + esc(data.title || data.songName || '') + '</strong></div>'
+      + '<div><span>Key:</span> <strong>' + esc(data.key || '') + '</strong></div>'
+      + '<div><span>BPM:</span> <strong>' + esc(String(data.bpm || '')) + '</strong></div>'
+      + '<div><span>Segments:</span> <strong>' + currentSegments.length + '</strong></div>';
+  }
+
+  // Set up the play-along display (chord trio, timeline, etc.)
+  paActive = true;
+  initPlayAlong();
+
+  // Start YouTube player
+  initYTPlayerForVideo(videoId);
 }
 
 async function startYouTubeIngest() {
@@ -669,7 +702,13 @@ function backToHome() {
   document.getElementById('review-section').classList.add('hidden');
   document.getElementById('playalong-section').classList.add('hidden');
   document.getElementById('home-section').classList.remove('hidden');
-  if (typeof paStopPlay === 'function') paStopPlay();
+  document.getElementById('pa-back-badge').style.display = 'none';
+  // Stop playback
+  if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') ytPlayer.pauseVideo();
+  const audioEl = document.getElementById('audio-player');
+  if (audioEl && !audioEl.paused) audioEl.pause();
+  if (paAnimFrame) { cancelAnimationFrame(paAnimFrame); paAnimFrame = null; }
+  paActive = false;
   loadVersionsList();
 }
 
@@ -1002,6 +1041,14 @@ async function pollIngest() {
 function showReview(data) {
   document.getElementById('home-section').classList.add('hidden');
   document.getElementById('review-section').classList.remove('hidden');
+
+  _currentSongName = data.songName || '';
+
+  const backBadge = document.getElementById('pa-back-badge');
+  if (backBadge) {
+    backBadge.style.display = '';
+    backBadge.onclick = backToHome;
+  }
 
   currentAlignMode = data.alignMode || 'beat';
   currentTranscript = data.transcript || [];
