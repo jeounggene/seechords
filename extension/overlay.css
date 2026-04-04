@@ -29,7 +29,7 @@
   padding: 0 !important;
   overflow: hidden !important;
   color: var(--sc-text) !important;
-  font-size: 14px !important;
+  font-size: 25px !important;
   line-height: 1.4 !important;
   z-index: 9999 !important;
   position: relative !important;
@@ -58,7 +58,7 @@
   align-items: center;
   gap: 0.43em;
   margin-right: auto;
-  font-size: 1.4rem;
+  font-size: 2.312rem;
 }
 
 .sc-logo-img {
@@ -83,7 +83,7 @@
 }
 
 .sc-badge {
-  font-size: .92rem;
+  font-size: 1.475rem;
   font-weight: 600;
   padding: 5px 14px;
   border-radius: 99px;
@@ -92,8 +92,9 @@
   white-space: nowrap;
 }
 
-.sc-badge-key { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
-.sc-badge-bpm { border-color: rgba(108,71,255,.25); color: rgba(180,123,255,.75); }
+.sc-badge-key    { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
+.sc-badge-bpm    { border-color: rgba(108,71,255,.25); color: rgba(180,123,255,.75); }
+.sc-badge-source { border-color: rgba(255,255,255,.15); color: rgba(255,255,255,.45); font-size: 1.2rem; }
 
 .sc-controls {
   display: flex;
@@ -109,7 +110,7 @@
   background: none;
   border: none;
   color: var(--sc-text-muted);
-  font-size: .9rem;
+  font-size: 1.438rem;
   cursor: pointer;
   padding: 4px 7px;
   border-radius: 4px;
@@ -119,7 +120,7 @@
 .sc-ctrl-btn:hover { color: var(--sc-text); background: var(--sc-border); }
 
 .sc-ctrl-label {
-  font-size: .92rem;
+  font-size: 1.475rem;
   font-weight: 600;
   color: var(--sc-text-muted);
   min-width: 70px;
@@ -139,14 +140,14 @@
 }
 .sc-sync-label {
   min-width: 48px;
-  font-size: .82rem;
+  font-size: 1.288rem;
 }
 
 .sc-toggle-btn {
   background: none;
   border: 1px solid var(--sc-border);
   color: var(--sc-text-muted);
-  font-size: .85rem;
+  font-size: 1.325rem;
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 6px;
@@ -165,7 +166,7 @@
   background: var(--sc-bg-input, #1a1a36);
   border: 1px solid var(--sc-border);
   color: var(--sc-text-muted);
-  font-size: .75rem;
+  font-size: 1.188rem;
   font-weight: 500;
   cursor: pointer;
   padding: 3px 6px;
@@ -183,7 +184,7 @@
   background: none;
   border: 1px solid var(--sc-border);
   color: var(--sc-text-muted);
-  font-size: .8rem;
+  font-size: 1.275rem;
   font-weight: 600;
   cursor: pointer;
   padding: 4px 10px;
@@ -202,7 +203,7 @@
   background: none;
   border: 1px solid var(--sc-border);
   color: var(--sc-text-muted);
-  font-size: .8rem;
+  font-size: 1.275rem;
   font-weight: 600;
   cursor: pointer;
   padding: 4px 10px;
@@ -229,7 +230,7 @@
   margin-bottom: 8px;
 }
 .sc-compare-title {
-  font-size: .85rem;
+  font-size: 1.325rem;
   font-weight: 600;
   color: var(--sc-text);
 }
@@ -237,7 +238,7 @@
   background: none;
   border: none;
   color: var(--sc-text-muted);
-  font-size: 1rem;
+  font-size: 1.6rem;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -253,7 +254,7 @@
   border-radius: 6px;
   color: var(--sc-text);
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: .8rem;
+  font-size: 1.275rem;
   padding: 8px 10px;
   resize: vertical;
   margin-bottom: 8px;
@@ -267,7 +268,7 @@
   border: none;
   padding: 6px 16px;
   border-radius: 6px;
-  font-size: .8rem;
+  font-size: 1.275rem;
   font-weight: 600;
   cursor: pointer;
   transition: background .2s;
@@ -297,12 +298,12 @@
   transition: width .4s ease;
 }
 .sc-compare-pct {
-  font-size: .85rem;
+  font-size: 1.325rem;
   font-weight: 700;
   white-space: nowrap;
 }
 .sc-compare-details {
-  font-size: .8rem;
+  font-size: 1.275rem;
   line-height: 1.6;
 }
 .sc-compare-row {
@@ -315,7 +316,7 @@
 }
 .sc-compare-error {
   color: #ff6b6b;
-  font-size: .8rem;
+  font-size: 1.275rem;
 }
 .sc-missing {
   color: #ff6b6b;
@@ -341,7 +342,7 @@
 .sc-align-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: .78rem;
+  font-size: 1.438rem;
 }
 .sc-align-table th {
   position: sticky;
@@ -381,7 +382,7 @@
   color: #fff;
   border: none;
   border-radius: 6px;
-  font-size: .82rem;
+  font-size: 1.288rem;
   font-weight: 700;
   cursor: pointer;
   transition: background .2s;
@@ -399,7 +400,7 @@
 /* ── Scrolling Timeline ── */
 .sc-timeline {
   position: relative;
-  height: 48px;
+  height: 68px;
   overflow-x: auto;
   overflow-y: hidden;
   border-bottom: 1px solid rgba(255,255,255,.07);
@@ -415,14 +416,14 @@
 
 .sc-beat-pad {
   flex-shrink: 0;
-  width: 48px;
+  width: 68px;
   height: 100%;
 }
 
 .sc-beat-block {
   flex-shrink: 0;
   position: relative;
-  width: 48px;
+  width: 68px;
   height: 100%;
   border-right: 1px solid rgba(255,255,255,.09);
   box-sizing: border-box;
@@ -444,12 +445,13 @@
 }
 .sc-beat-block.sc-beat-empty:hover { background: transparent; }
 
+/* Beat strip only: chord per beat, no diagram — keep smaller than the trio row */
 .sc-beat-name {
   position: absolute;
   bottom: 4px;
   left: 5px;
   font-weight: 700;
-  font-size: 1.4rem;
+  font-size: 1.815rem;
   font-weight: 700;
   line-height: 1;
   color: rgba(255,255,255,.75);
@@ -460,7 +462,7 @@
 .sc-beat-block.sc-active .sc-beat-name { color: #fff; }
 
 .sc-beat-name.sc-beat-n {
-  font-size: 1rem;
+  font-size: 1.21rem;
   font-weight: 600;
   color: var(--sc-text-muted);
   opacity: 0.9;
@@ -470,12 +472,12 @@
 }
 
 .sc-chord-suffix {
-  font-size: .75em;
+  font-size: 1.025em;
   font-weight: 400;
   opacity: .8;
 }
 .sc-flat {
-  font-size: .75em;
+  font-size: 1.025em;
   vertical-align: baseline;
 }
 
@@ -500,8 +502,8 @@
   transition: opacity .22s ease;
 }
 
-.sc-card-prev,
-.sc-card-next { opacity: .35; }
+.sc-card-prev { opacity: .35; }
+.sc-card-next { opacity: .66; }
 
 .sc-card-active {
   opacity: 1;
@@ -516,33 +518,46 @@
   letter-spacing: -0.5px;
 }
 
+/* Trio row: chord name above fretboard — sized to read with the diagram */
 .sc-card-active .sc-chord-name {
-  font-size: 2.4rem;
+  font-size: 3.75rem;
   color: var(--sc-gold);
   text-shadow: 0 0 20px rgba(255,215,0,.55), 0 0 60px rgba(255,215,0,.25);
 }
 
-.sc-card-prev .sc-chord-name,
-.sc-card-next .sc-chord-name {
-  font-size: 1.4rem;
+.sc-card-prev .sc-chord-name {
+  font-size: 2.25rem;
   color: #e0e0ff;
+}
+.sc-card-next .sc-chord-name {
+  font-size: 2.25rem;
+  color: #f4f4ff;
 }
 
 .sc-chord-card .sc-chord-diagram {
   display: flex;
   justify-content: center;
   margin-top: 4px;
+  flex-shrink: 0;
+}
+.sc-chord-card .sc-chord-diagram svg {
+  width: 140px !important;
+  height: 149px !important;
+  max-width: none !important;
+  flex-shrink: 0;
+  display: block;
 }
 .sc-card-active .sc-chord-diagram { opacity: 1; }
-.sc-card-prev .sc-chord-diagram,
-.sc-card-next .sc-chord-diagram { opacity: .35; }
+.sc-card-prev .sc-chord-diagram { opacity: .35; }
+.sc-card-next .sc-chord-diagram { opacity: .82; }
 
 @keyframes scCardEnter {
   0%   { transform: scale(.88); opacity: .5; }
   60%  { transform: scale(1.04); }
   100% { transform: scale(1);   opacity: 1; }
 }
-.sc-card-active.sc-entering {
+/* Animate only the name line so the fretboard SVG stays full size */
+.sc-card-active.sc-entering .sc-chord-name {
   animation: scCardEnter .28s cubic-bezier(.34,1.56,.64,1) forwards;
 }
 
@@ -551,7 +566,7 @@
   padding: 12px 16px;
   text-align: center;
   color: var(--sc-text-muted);
-  font-size: .9rem;
+  font-size: 1.438rem;
 }
 
 .sc-upload-prompt {
@@ -560,21 +575,21 @@
 }
 
 .sc-upload-msg {
-  font-size: 1rem;
+  font-size: 1.6rem;
   font-weight: 600;
   color: var(--sc-text);
   margin-bottom: 4px;
 }
 
 .sc-upload-sub {
-  font-size: .85rem;
+  font-size: 1.325rem;
   color: var(--sc-text-muted);
   margin: 8px 0 6px;
   line-height: 1.4;
 }
 
 .sc-upload-note {
-  font-size: .82rem;
+  font-size: 1.288rem;
   color: var(--sc-text-muted);
   margin: 0 0 12px;
   line-height: 1.45;
@@ -602,7 +617,7 @@
   border-radius: 8px;
   padding: 8px 18px;
   color: var(--sc-text);
-  font-size: .9rem;
+  font-size: 1.438rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color .2s, background .2s;
@@ -613,7 +628,7 @@
 }
 
 .sc-file-name {
-  font-size: .88rem;
+  font-size: 1.375rem;
   color: #7dffb3;
   margin: 6px 0 10px;
   font-weight: 600;
@@ -625,7 +640,7 @@
   justify-content: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-size: .82rem;
+  font-size: 1.288rem;
   color: var(--sc-text-muted);
 }
 .sc-rights-check input {
@@ -638,7 +653,7 @@
   border: none;
   border-radius: 8px;
   padding: 10px 24px;
-  font-size: .95rem;
+  font-size: 1.5rem;
   font-weight: 600;
   cursor: pointer;
   transition: background .2s, opacity .2s;
@@ -682,7 +697,7 @@
 }
 
 .sc-progress-msg-row {
-  font-size: .82rem;
+  font-size: 1.288rem;
   color: var(--sc-text-muted);
   display: flex;
   justify-content: center;
@@ -702,11 +717,11 @@
   white-space: nowrap;
 }
 
-/* ── Video dock: tall band anchored to bottom (bottom: 0); higher % = more room, less cutoff at top ── */
+/* ── Video dock: flush to video bottom; gradient is clear at bottom, dark purple toward top ── */
 #seechords-overlay.sc-overlay-on-video {
-  --sc-fs-zoom: 1.5;
-  --sc-overlay-height-pct: 65%;
-  --sc-overlay-height-vh: 65vh;
+  --sc-fs-zoom: 1.75;
+  --sc-overlay-height-pct: 82%;
+  --sc-overlay-height-vh: 82vh;
   top: auto !important;
   left: 0 !important;
   right: 0 !important;
@@ -715,7 +730,7 @@
   margin: 0 !important;
   border-radius: 0 !important;
   border: none !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
   display: flex !important;
   flex-direction: column !important;
   overflow-x: hidden !important;
@@ -724,16 +739,24 @@
   padding-bottom: 0 !important;
   box-sizing: border-box !important;
   zoom: var(--sc-fs-zoom);
+  /* to top: 0% = video bottom (fully clear) → ramp to dark purple toward top */
   background: linear-gradient(
     to top,
-    rgba(8, 8, 18, 0.96) 0%,
-    rgba(8, 8, 18, 0.78) 50%,
-    rgba(8, 8, 18, 0.42) 100%
+    rgba(8, 8, 18, 0) 0%,
+    rgba(17, 13, 46, 0.32) 8%,
+    rgba(26, 17, 58, 0.6) 20%,
+    rgba(17, 13, 46, 0.85) 38%,
+    rgba(12, 10, 36, 1) 58%,
+    rgba(8, 8, 18, 1) 100%
   ) !important;
-  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5) !important;
+  background-size: 100% 100% !important;
+  background-repeat: no-repeat !important;
+  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.4) !important;
 }
 
+/* Embedded in #movie_player: taller band + let parent gradient show (not hidden by .sc-body solid fill) */
 #seechords-overlay.sc-overlay-on-video:not(.sc-overlay-fs-document):not(.sc-overlay-fallback-body) {
+  --sc-overlay-height-pct: 92%;
   position: absolute !important;
   height: calc(var(--sc-overlay-height-pct) / var(--sc-fs-zoom)) !important;
   min-height: calc(120px / var(--sc-fs-zoom));
@@ -748,23 +771,6 @@
   min-height: calc(140px / var(--sc-fs-zoom));
   bottom: 0 !important;
   z-index: 35 !important;
-}
-
-/*
- * Fullscreen only: bottom band fades to fully transparent at the YouTube scrubber / red line,
- * then builds into the same purple tint above the chord row.
- */
-#seechords-overlay.sc-overlay-on-video.sc-overlay-fs-document {
-  background: linear-gradient(
-    to top,
-    rgba(8, 8, 18, 0) 0%,
-    rgba(8, 8, 18, 0) 14%,
-    rgba(8, 8, 18, 0.22) 32%,
-    rgba(8, 8, 18, 0.55) 58%,
-    rgba(8, 8, 18, 0.82) 82%,
-    rgba(8, 8, 18, 0.95) 100%
-  ) !important;
-  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.22) !important;
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-header,
@@ -782,7 +788,7 @@
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-logo {
-  font-size: 1.05rem;
+  font-size: 1.65rem;
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-logo-img {
@@ -796,10 +802,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Default .sc-body uses solid #0a0a1a — that hid the overlay’s purple gradient in embedded view */
+  background: transparent !important;
+  border-bottom: none !important;
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-timeline {
-  height: 48px;
+  height: 68px;
   flex-shrink: 0;
   cursor: pointer;
 }
@@ -807,11 +816,36 @@
 #seechords-overlay.sc-overlay-on-video .sc-chord-trio {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 6px 8px 2px;
+  padding: 6px 8px 10px;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Darker wash behind the chord-name + diagram column; eases to clear at the overlay bottom */
+#seechords-overlay.sc-overlay-on-video .sc-chord-trio::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(22, 18, 48, 0.1) 0%,
+    rgba(17, 13, 46, 0.34) 30%,
+    rgba(14, 11, 40, 0.7) 48%,
+    rgba(12, 10, 34, 0.78) 64%,
+    rgba(10, 10, 26, 0.45) 86%,
+    rgba(8, 8, 18, 0) 100%
+  );
+}
+
+#seechords-overlay.sc-overlay-on-video .sc-chord-card {
+  position: relative;
+  z-index: 1;
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-card-active .sc-chord-name {
-  font-size: 2rem;
+  font-size: 3.25rem;
 }
 
 #seechords-overlay.sc-overlay-on-video .sc-compare-panel {

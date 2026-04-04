@@ -1544,6 +1544,7 @@ function buildPlayerHTML(title) {
       <div class="player-meta-bar">
         <span class="badge badge-key" id="keyBadge">Key: —</span>
         <span class="badge badge-bpm" id="bpmBadge">BPM: —</span>
+        <span class="badge" id="sourceBadge" style="display:none;border-color:rgba(255,215,0,.25);color:rgba(255,215,0,.75);font-size:.85rem;padding:4px 12px;border-radius:99px;border:1px solid;"></span>
         <div class="transpose-ctrl">
           <button class="ctrl-btn" id="transpDown" aria-label="Transpose down" type="button">▼</button>
           <span class="ctrl-label" id="transpLabel">Original</span>
@@ -1983,6 +1984,14 @@ function initPlayer(data) {
   // Badges
   document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
   document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
+
+  // Attribution badge
+  var sourceBadge = document.getElementById('sourceBadge');
+  if (sourceBadge) {
+    var src = data.source || 'model';
+    sourceBadge.textContent = (src === 'verified') ? 'Made by Jin' : 'Made by SeeChords';
+    sourceBadge.style.display = '';
+  }
 
   // Transpose buttons
   document.getElementById('transpDown').addEventListener('click', () => {

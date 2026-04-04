@@ -711,6 +711,7 @@ function injectOverlay() {
       <div class="sc-badges">
         <span class="sc-badge sc-badge-key" id="scKeyBadge">Key: —</span>
         <span class="sc-badge sc-badge-bpm" id="scBpmBadge">BPM: —</span>
+        <span class="sc-badge sc-badge-source" id="scSourceBadge" style="display:none;"></span>
       </div>
       <div class="sc-controls">
         <button class="sc-ctrl-btn" id="scTransposeDown" title="Transpose down">▼</button>
@@ -764,7 +765,6 @@ function injectOverlay() {
     <div class="sc-upload-prompt" id="scUploadPrompt" style="display:none;">
       <p class="sc-upload-msg">No chords found for this video.</p>
       <p class="sc-upload-sub">Run analysis on SeeChords Server.</p>
-      <p class="sc-upload-note">Because it's the first time this song is analyzed, it may take a few minutes.</p>
       <button type="button" class="sc-analyze-btn" id="scAnalyzeServerBtn">Analyze this video</button>
       <div class="sc-progress" id="scProgress" style="display:none;">
         <div class="sc-progress-track" id="scProgressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -773,7 +773,6 @@ function injectOverlay() {
         <div class="sc-progress-msg-row">
           <span id="scProgressMsg">Processing…</span>
           <span class="sc-progress-pct" id="scProgressPct" aria-hidden="true"></span>
-          <span class="sc-progress-eta" id="scProgressEta" aria-hidden="true"></span>
         </div>
       </div>
     </div>
@@ -1147,11 +1146,6 @@ function stopTracking() {
 
 // ─── Server analysis (yt-dlp / worker) ───────────────────
 let serverAnalyzePollTimer = null;
-/** Wall-clock start for ETA (set when user starts server analyze). */
-let serverAnalyzeStartedAtMs = 0;
-/** Last server progress % we saw; used to detect “stuck” so ETA does not balloon. */
-let serverAnalyzeLastProgressPct = null;
-let serverAnalyzeLastProgressAtMs = 0;
 /** True if we paused the page video during server analysis (resume when the job ends). */
 let serverAnalyzeWePausedVideo = false;
 
@@ -1172,47 +1166,10 @@ function resumeVideoAfterServerAnalyzeIfNeeded() {
   }
 }
 
-/** Don’t extrapolate time from very early % — worker uses coarse steps (5% = long download). */
-const ETA_MIN_PCT = 12;
-/** If % hasn’t moved in this long, don’t show ETA (linear model is meaningless). */
-const ETA_STUCK_MS = 90000;
-
 function clampJobProgress(p) {
   const n = Number(p);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(100, Math.round(n)));
-}
-
-function noteProgressForEta(pct) {
-  if (serverAnalyzeLastProgressPct !== pct) {
-    serverAnalyzeLastProgressPct = pct;
-    serverAnalyzeLastProgressAtMs = Date.now();
-  }
-}
-
-/** Linear extrapolation when progress % roughly tracks wall time (not valid at 5% for ages). */
-function estimateRemainingSeconds(pct, startedAtMs) {
-  if (!startedAtMs || pct < ETA_MIN_PCT || pct >= 100) return null;
-  const elapsedSec = (Date.now() - startedAtMs) / 1000;
-  if (elapsedSec < 0.5) return null;
-  const rem = (elapsedSec * (100 - pct)) / pct;
-  if (!Number.isFinite(rem) || rem < 0) return null;
-  if (rem > 7200) return null;
-  return rem;
-}
-
-function progressLooksStuck(pct) {
-  if (serverAnalyzeLastProgressPct !== pct) return false;
-  return Date.now() - serverAnalyzeLastProgressAtMs > ETA_STUCK_MS;
-}
-
-/** e.g. 45s, 2m 15s, 1m */
-function formatMinSec(totalSec) {
-  const s = Math.max(0, Math.round(totalSec));
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  if (m === 0) return `${sec}s`;
-  return sec ? `${m}m ${sec}s` : `${m}m`;
 }
 
 function friendlyAnalysisError(msg) {
@@ -1228,31 +1185,15 @@ function applyServerJobProgress(data) {
   const fill = document.getElementById('scProgressFill');
   const msgEl = document.getElementById('scProgressMsg');
   const pctEl = document.getElementById('scProgressPct');
-  const etaEl = document.getElementById('scProgressEta');
   if (!track || !fill || !msgEl) return;
   const status = data.status;
   const pct = clampJobProgress(data.progress);
   const message = (data.message && String(data.message).trim()) || 'Processing…';
   const indeterminate = status === 'pending' && pct === 0;
   const hidePct = indeterminate || status === 'error';
-  noteProgressForEta(pct);
-  const showEta =
-    !indeterminate &&
-    status !== 'error' &&
-    status !== 'done' &&
-    serverAnalyzeStartedAtMs > 0 &&
-    !progressLooksStuck(pct);
-  let etaText = '';
-  if (showEta) {
-    const rem = estimateRemainingSeconds(pct, serverAnalyzeStartedAtMs);
-    if (rem != null) {
-      etaText = `~${formatMinSec(rem)} left`;
-    }
-  }
 
   msgEl.textContent = message;
   if (pctEl) pctEl.textContent = hidePct ? '' : `${pct}%`;
-  if (etaEl) etaEl.textContent = etaText ? ` · ${etaText}` : '';
   track.classList.toggle('sc-progress-indeterminate', indeterminate);
   track.setAttribute('aria-valuenow', indeterminate ? '0' : String(pct));
   if (!indeterminate) {
@@ -1268,9 +1209,6 @@ function startServerAnalyze() {
   const progressDiv = document.getElementById('scProgress');
   if (btn) btn.disabled = true;
   progressDiv.style.display = 'block';
-  serverAnalyzeStartedAtMs = Date.now();
-  serverAnalyzeLastProgressPct = null;
-  serverAnalyzeLastProgressAtMs = Date.now();
   applyServerJobProgress({ status: 'pending', progress: 0, message: 'Fetching audio in your browser…' });
 
   const title = document.title.replace(' - YouTube', '').trim();
@@ -1573,6 +1511,14 @@ function loadChordData(data) {
   document.getElementById('scTransposeLabel').textContent = 'Original';
 
   currentChordSource = data.source || null;
+
+  // Attribution badge
+  const scSourceBadge = document.getElementById('scSourceBadge');
+  if (scSourceBadge) {
+    const sourceLabel = (currentChordSource === 'verified') ? 'Made by Jin' : 'Made by SeeChords';
+    scSourceBadge.textContent = sourceLabel;
+    scSourceBadge.style.display = '';
+  }
 
   // Show the version controls
   const vc = document.getElementById('scVersionControls');
