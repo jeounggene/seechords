@@ -2607,39 +2607,9 @@ def promote_to_verified(job_id):
     if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
         return jsonify({'error': 'Valid videoId required.'}), 400
 
-    safe_name = re.sub(r'[^\w\s\-]', '', song_name).strip().replace(' ', '_')
-    if not safe_name:
-        safe_name = video_id
-
     key_val = _infer_key_from_segments(segments) or data.get('key', job.get('key', '?'))
     bpm_val = round(float(data.get('bpm', job.get('bpm', 120))), 1)
     beat_times = data.get('beatTimes', job.get('beatTimes', []))
-
-    # Write .lab file to server/verified/labels/
-    lab_lines = []
-    for seg in segments:
-        iso = _display_to_iso(seg.get('chord', 'N'))
-        lab_lines.append(f'{float(seg["start"]):.6f} {float(seg["end"]):.6f} {iso}\n')
-    lbl_dir = os.path.join(SERVER_VERIFIED_DIR, 'labels')
-    os.makedirs(lbl_dir, exist_ok=True)
-    with open(os.path.join(lbl_dir, f'{safe_name}.lab'), 'w') as f:
-        f.writelines(lab_lines)
-
-    # Copy audio to server/verified/audio/ if available
-    audio_src = job.get('audioPath', '') or _find_ingest_audio_path(job_id)
-    aud_dir = os.path.join(SERVER_VERIFIED_DIR, 'audio')
-    os.makedirs(aud_dir, exist_ok=True)
-    if audio_src and os.path.exists(audio_src):
-        audio_dest = os.path.join(aud_dir, f'{safe_name}.wav')
-        if not os.path.exists(audio_dest):
-            try:
-                subprocess.run(
-                    ['ffmpeg', '-i', audio_src, '-vn', '-ar', '44100', '-ac', '1',
-                     audio_dest, '-y'],
-                    capture_output=True, timeout=180,
-                )
-            except Exception:
-                pass  # audio copy is best-effort
 
     display_chords = []
     for seg in segments:
