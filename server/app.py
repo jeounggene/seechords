@@ -2596,6 +2596,23 @@ def get_version(version_id):
     return jsonify(_version_row_to_dict(row))
 
 
+# ── Delete a version ──────────────────────────────────────────────
+
+@app.route('/api/ingest/version/<int:version_id>', methods=['DELETE'])
+@_require_ingest_auth
+def delete_version(version_id):
+    """Delete a chord version by ID."""
+    con = _get_db()
+    row = con.execute('SELECT version_id FROM chord_versions WHERE version_id = ?', (version_id,)).fetchone()
+    if not row:
+        con.close()
+        return jsonify({'error': 'Version not found.'}), 404
+    con.execute('DELETE FROM chord_versions WHERE version_id = ?', (version_id,))
+    con.commit()
+    con.close()
+    return jsonify({'deleted': True, 'versionId': version_id})
+
+
 # ── Promote a version to verified (human-checked) ─────────────────
 
 @app.route('/api/ingest/<job_id>/promote-verified', methods=['POST'])

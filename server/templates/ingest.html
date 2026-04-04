@@ -50,6 +50,8 @@
   .review-table td { padding: 5px 8px; border-bottom: 1px solid #222; vertical-align: middle; }
   .review-table tr:hover { background: rgba(255,255,255,0.03); }
   .review-table tr.mismatch { background: rgba(233,69,96,0.08); }
+  .btn-delete-version { background: none; border: 1px solid rgba(255,80,80,.3); color: rgba(255,80,80,.6); border-radius: 4px; cursor: pointer; padding: 2px 6px; font-size: 0.8em; }
+  .btn-delete-version:hover { background: rgba(255,80,80,.15); color: #f55; }
   .review-table tr.playing { background: rgba(78,204,163,0.15); }
   .match-yes { color: var(--ok); }
   .match-no { color: var(--hi); }
@@ -567,7 +569,7 @@ async function loadVersionsList() {
     el.innerHTML = '';
     const table = document.createElement('table');
     table.className = 'review-table';
-    table.innerHTML = '<thead><tr><th>Title</th><th>Key</th><th>BPM</th><th>Source</th><th>Chords</th><th>Date</th></tr></thead>';
+    table.innerHTML = '<thead><tr><th>Title</th><th>Key</th><th>BPM</th><th>Source</th><th>Chords</th><th>Date</th><th></th></tr></thead>';
     const tbody = document.createElement('tbody');
     for (const v of versions) {
       const tr = document.createElement('tr');
@@ -575,13 +577,29 @@ async function loadVersionsList() {
       tr.onclick = () => loadSavedVersion(v.versionId, v.videoId);
       const sourceLabel = v.source === 'verified' ? 'Made by Jin' : 'Draft';
       const date = new Date(v.analyzedAt * 1000).toLocaleDateString();
-      tr.innerHTML = '<td>' + (v.title || '\u2014') + '</td><td>' + (v.key || '\u2014') + '</td><td>' + (v.bpm || '\u2014') + '</td><td>' + sourceLabel + '</td><td>' + v.segmentCount + '</td><td>' + date + '</td>';
+      tr.innerHTML = '<td>' + (v.title || '\u2014') + '</td><td>' + (v.key || '\u2014') + '</td><td>' + (v.bpm || '\u2014') + '</td><td>' + sourceLabel + '</td><td>' + v.segmentCount + '</td><td>' + date + '</td><td><button class="btn-delete-version" data-vid="' + v.versionId + '" onclick="event.stopPropagation(); deleteVersion(' + v.versionId + ')">✕</button></td>';
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
     el.appendChild(table);
   } catch (e) {
     el.textContent = 'Error loading versions.';
+  }
+}
+
+async function deleteVersion(versionId) {
+  if (!confirm('Delete this version? This cannot be undone.')) return;
+  try {
+    const resp = await fetch(API + '/api/ingest/version/' + versionId, { method: 'DELETE' });
+    if (resp.status === 401) { location.reload(); return; }
+    const data = await resp.json();
+    if (resp.ok && data.deleted) {
+      loadVersionsList();
+    } else {
+      alert('Delete failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Delete error: ' + e.message);
   }
 }
 
