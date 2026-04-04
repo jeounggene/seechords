@@ -405,6 +405,8 @@
     <div class="pa-header">
       <h2>🎸 Play Along</h2>
       <span class="pa-badge" id="pa-back-badge" onclick="backToHome()" style="display:none;background:var(--accent);cursor:pointer;">↩ Back</span>
+      <span class="pa-badge" id="pa-upload-lab-badge" onclick="document.getElementById('labFileInput').click()" style="display:none;background:#1a1a36;cursor:pointer;border-color:rgba(255,165,0,.25);color:rgba(255,165,0,.75);">📂 Upload Label</span>
+      <input type="file" id="labFileInput" accept=".lab" style="display:none;" onchange="handleLabUpload(this)">
       <span class="pa-badge pa-badge-key" id="pa-key-badge" title="Song key (fixed base key)">Key: —</span>
       <span class="pa-badge pa-badge-bpm" id="pa-bpm-badge">BPM: —</span>
       <div class="pa-transpose-controls" title="Transpose display (save stays in base key)">
@@ -590,10 +592,9 @@ async function loadSavedVersion(versionId, videoId) {
   document.getElementById('playalong-section').classList.remove('hidden');
 
   const backBadge = document.getElementById('pa-back-badge');
-  if (backBadge) {
-    backBadge.style.display = '';
-    backBadge.onclick = backToHome;
-  }
+  if (backBadge) { backBadge.style.display = ''; backBadge.onclick = backToHome; }
+  const uploadLabBadge = document.getElementById('pa-upload-lab-badge');
+  if (uploadLabBadge) uploadLabBadge.style.display = '';
 
   try {
     const resp = await fetch(API + '/api/version/' + versionId);
@@ -685,6 +686,7 @@ function backToHome() {
   document.getElementById('playalong-section').classList.add('hidden');
   document.getElementById('home-section').classList.remove('hidden');
   document.getElementById('pa-back-badge').style.display = 'none';
+  document.getElementById('pa-upload-lab-badge').style.display = 'none';
   // Stop playback
   if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') ytPlayer.pauseVideo();
   const audioEl = document.getElementById('audio-player');
@@ -695,6 +697,53 @@ function backToHome() {
 }
 
 let _ingestBeatTimes = null;    // beat_times from fresh ingest result
+
+const _ISO_QUALITY_MAP = {
+  'maj': '', 'min': 'm', '7': '7', 'maj7': 'maj7', 'min7': 'm7',
+  'dim': 'dim', 'dim7': 'dim7', 'hdim7': 'm7b5', 'aug': 'aug',
+  'sus2': 'sus2', 'sus4': 'sus4', '6': '6', 'min6': 'm6', '9': '9',
+  'min9': 'm9', '13': '13', 'minmaj7': 'mmaj7', 'maj9': 'maj9',
+  'min11': 'm11', 'min13': 'm13', 'add9': 'add9', '11': '11',
+};
+
+function _isoToDisplay(iso) {
+  if (!iso || iso === 'N') return 'N';
+  let bass = '';
+  const slashIdx = iso.indexOf('/');
+  if (slashIdx !== -1) { bass = iso.slice(slashIdx); iso = iso.slice(0, slashIdx); }
+  const colonIdx = iso.indexOf(':');
+  if (colonIdx === -1) return iso + bass;
+  const root = iso.slice(0, colonIdx);
+  const quality = iso.slice(colonIdx + 1);
+  const suffix = _ISO_QUALITY_MAP[quality] !== undefined ? _ISO_QUALITY_MAP[quality] : quality;
+  return root + suffix + bass;
+}
+
+function handleLabUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = ''; // reset so same file can be re-uploaded
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const text = e.target.result;
+    const lines = text.trim().split('\n');
+    const newSegments = [];
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const start = parseFloat(parts[0]);
+      const end = parseFloat(parts[1]);
+      const isoChord = parts.slice(2).join(' ');
+      if (isNaN(start) || isNaN(end)) continue;
+      newSegments.push({ start: start, end: end, chord: _isoToDisplay(isoChord) });
+    }
+    if (!newSegments.length) { alert('No valid chords found in label file.'); return; }
+    currentSegments = newSegments;
+    paBuildBeatTimeline();
+    alert('Loaded ' + newSegments.length + ' chords from label file.');
+  };
+  reader.readAsText(file);
+}
 
 
 
@@ -741,10 +790,9 @@ function showReview(data) {
   _currentSongName = data.songName || '';
 
   const backBadge = document.getElementById('pa-back-badge');
-  if (backBadge) {
-    backBadge.style.display = '';
-    backBadge.onclick = backToHome;
-  }
+  if (backBadge) { backBadge.style.display = ''; backBadge.onclick = backToHome; }
+  const uploadLabBadge2 = document.getElementById('pa-upload-lab-badge');
+  if (uploadLabBadge2) uploadLabBadge2.style.display = '';
 
   currentAlignMode = data.alignMode || 'beat';
   currentTranscript = data.transcript || [];
