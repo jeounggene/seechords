@@ -2450,8 +2450,7 @@ def ingest_save_version(job_id):
     if not segments:
         return jsonify({'error': 'No segments to save.'}), 400
 
-    # Use job_id as video_id (stable identifier for this ingest session)
-    video_id = job_id[:11]  # truncate to 11 chars for compat
+    video_id = data.get('videoId') or job_id[:11]
 
     # Build chords_data in the format chord_versions expects
     chords_data = []
@@ -2462,10 +2461,26 @@ def ingest_save_version(job_id):
             'end': float(seg['end']),
         })
 
-    # Insert as new version (don't delete old ones — keep history)
+    # Generate .lab file (Isophonics format) in server/verified/labels/
+    safe_name = re.sub(r'[^\w\s\-]', '', song_name).strip().replace(' ', '_')
+    if not safe_name:
+        safe_name = video_id
+    lab_lines = []
+    for seg in segments:
+        chord = seg.get('chord', 'N')
+        start = float(seg['start'])
+        end = float(seg['end'])
+        iso = _display_to_iso(chord)
+        lab_lines.append(f'{start:.6f} {end:.6f} {iso}\n')
+    lbl_dir = os.path.join(SERVER_VERIFIED_DIR, 'labels')
+    os.makedirs(lbl_dir, exist_ok=True)
+    lab_path = os.path.join(lbl_dir, f'{safe_name}.lab')
+    with open(lab_path, 'w') as f:
+        f.writelines(lab_lines)
+
+    # Upsert: delete any existing ingest-edit version, insert fresh
     con = _get_db()
-    # Deactivate previous versions
-    con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = 'ingest-edit'", (video_id,))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
@@ -2482,6 +2497,7 @@ def ingest_save_version(job_id):
         'versionId': version_id,
         'videoId': video_id,
         'segmentCount': len(segments),
+        'labFile': f'{safe_name}.lab',
     })
 
 
@@ -2659,8 +2675,7 @@ def promote_to_verified(job_id):
             })
 
     con = _get_db()
-    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = 'verified'", (video_id,))
-    con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
+    con.execute("DELETE FROM chord_versions WHERE video_id = ?", (video_id,))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)

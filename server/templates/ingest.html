@@ -132,26 +132,6 @@
     cursor: pointer; margin-left: auto;
   }
   .pa-badge-save:hover { background: rgba(0,200,100,.1); }
-  .pa-badge-history {
-    border-color: rgba(180,123,255,.25); color: rgba(180,123,255,.75);
-    cursor: pointer; position: relative;
-  }
-  .pa-badge-history:hover { background: rgba(180,123,255,.1); }
-  .pa-versions-dropdown {
-    display: none; position: absolute; top: 100%; right: 0; margin-top: 6px;
-    background: #12122a; border: 1px solid #2a2a50; border-radius: 8px;
-    min-width: 280px; max-height: 240px; overflow-y: auto; z-index: 30;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
-  }
-  .pa-versions-dropdown.open { display: block; }
-  .pa-version-item {
-    padding: 8px 12px; cursor: pointer; font-size: .78rem;
-    border-bottom: 1px solid #1a1a36; color: #aaa;
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .pa-version-item:hover { background: #1a1a36; color: #fff; }
-  .pa-version-item.active { color: #ffd700; background: rgba(255,215,0,.05); }
-  .pa-version-item .v-date { font-size: .65rem; color: #666; }
   .pa-key-edit {
     background: #1a1a36; border: 1px solid #6c47ff; border-radius: 4px;
     color: #ffd700; font-size: .85rem; font-weight: 700;
@@ -434,9 +414,6 @@
       </div>
       <span class="pa-badge" id="pa-save-draft-badge" onclick="saveDraft()" style="background:#1a1a36;cursor:pointer;border-color:rgba(78,204,163,.25);color:rgba(78,204,163,.75);" title="Save as draft (not visible to users)">Save</span>
       <span class="pa-badge" id="pa-save-upload-badge" onclick="saveAndUpload()" style="background:#2a6e2a;cursor:pointer;" title="Save and make live for all users">Save &amp; Upload</span>
-      <span class="pa-badge pa-badge-history" id="pa-history-badge" onclick="paToggleHistory()">📋 History
-        <div class="pa-versions-dropdown" id="pa-versions-dropdown"></div>
-      </span>
     </div>
 
     <!-- Chord Bank -->
@@ -1887,7 +1864,6 @@ async function saveAndUpload() {
         badge.style.background = '#1a8c1a';
         setTimeout(function() { badge.textContent = 'Save & Upload'; badge.style.background = '#2a6e2a'; }, 3000);
       }
-      paLoadHistory();
     } else {
       alert('Upload failed: ' + (data.error || 'Unknown error'));
     }
@@ -1896,92 +1872,6 @@ async function saveAndUpload() {
   }
 }
 
-function paToggleHistory() {
-  const dropdown = document.getElementById('pa-versions-dropdown');
-  const isOpen = dropdown.classList.contains('open');
-  dropdown.classList.toggle('open');
-  if (!isOpen) paLoadHistory();
-}
-
-async function paLoadHistory() {
-  if (!currentJobId && !paCurrentVideoId) return;
-  const dropdown = document.getElementById('pa-versions-dropdown');
-  dropdown.innerHTML = '<div class="pa-version-item" style="color:#666">Loading…</div>';
-
-  try {
-    const url = paCurrentVideoId
-      ? API + '/api/versions/' + paCurrentVideoId
-      : API + '/api/ingest/' + currentJobId + '/versions';
-    const resp = await fetch(url);
-    const data = await resp.json();
-    const versions = data.versions || [];
-
-    if (!versions.length) {
-      dropdown.innerHTML = '<div class="pa-version-item" style="color:#666">No saved versions yet</div>';
-      return;
-    }
-
-    dropdown.innerHTML = '';
-    versions.forEach(v => {
-      const item = document.createElement('div');
-      item.className = 'pa-version-item';
-      const date = new Date(v.analyzedAt * 1000);
-      const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-      const label = v.source === 'verified' ? '✓ Verified' : `v${v.versionId}`;
-      item.innerHTML = `<span>${label} · ${v.key} · ${v.segmentCount} segs</span><span class="v-date">${dateStr}</span>`;
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        paLoadVersion(v.versionId);
-        dropdown.classList.remove('open');
-      });
-      dropdown.appendChild(item);
-    });
-  } catch (e) {
-    dropdown.innerHTML = '<div class="pa-version-item" style="color:#f66">Error loading versions</div>';
-  }
-}
-
-async function paLoadVersion(versionId) {
-  try {
-    const resp = await fetch(API + '/api/version/' + versionId);
-    const data = await resp.json();
-    if (!resp.ok) { alert(data.error || 'Load failed'); return; }
-
-    // Update segments — drop N segments
-    currentSegments = data.chords || [];
-    paBaseKey = data.key || '?';
-    paCurrentKey = paBaseKey;
-    paTransposeSemitones = 0;
-    paRenderKeyBadge();
-    paRenderTransposeLabel();
-    document.getElementById('pa-bpm-badge').textContent = `BPM: ${data.bpm}`;
-
-    // Rebuild beat timeline from segments
-    paBuildBeatTimeline();
-
-    // Keep audio playable when history changes only chord metadata.
-    const player = document.getElementById('audio-player');
-    if ((!player.src || player.src === window.location.href) && paAudioSrc) {
-      player.src = paAudioSrc;
-      player.load();
-    }
-
-    const badge = document.querySelector('.pa-badge-save');
-    badge.textContent = `📋 Loaded v${versionId}`;
-    setTimeout(() => { badge.textContent = '💾 Save'; }, 2000);
-  } catch (e) {
-    alert('Load error: ' + e.message);
-  }
-}
-
-// Close dropdown when clicking outside
-document.addEventListener('click', (e) => {
-  const dropdown = document.getElementById('pa-versions-dropdown');
-  const badge = document.getElementById('pa-history-badge');
-  if (dropdown && badge && !badge.contains(e.target)) {
-    dropdown.classList.remove('open');
-  }
-});
 
 // Global keyboard shortcuts
 document.addEventListener('keydown', (e) => {
