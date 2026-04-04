@@ -387,7 +387,29 @@
 </head>
 <body>
 
-<h1>🎵 Ingest Chord Sheet → Training Data</h1>
+{% if show_login %}
+<div style="max-width:400px;margin:120px auto;padding:0 20px;">
+  <h1 style="font-size:1.6em;margin-bottom:24px;color:#e94560;text-align:center;">SeeChords Ingest</h1>
+  <form method="POST" action="/ingest/login" style="background:#16213e;padding:32px;border-radius:12px;">
+    {% if login_error %}
+    <div style="color:#e94560;font-size:0.9em;margin-bottom:12px;">{{ login_error }}</div>
+    {% endif %}
+    <label style="display:block;margin-bottom:6px;font-size:0.9em;color:#888;">Password</label>
+    <input type="password" name="password" autofocus
+           style="width:100%;padding:10px;margin-bottom:16px;background:#0f3460;border:1px solid #333;border-radius:4px;color:#eee;font-family:inherit;font-size:0.95em;">
+    <button type="submit" style="width:100%;padding:12px;background:#e94560;color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:0.95em;font-weight:600;cursor:pointer;">
+      Log in
+    </button>
+  </form>
+</div>
+{% else %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+  <h1>SeeChords – Ingest</h1>
+  <form method="POST" action="/ingest/logout" style="margin:0;">
+    <button type="submit" style="padding:6px 14px;background:#333;color:#888;border:1px solid #555;border-radius:4px;cursor:pointer;font-size:0.8em;">Logout</button>
+  </form>
+</div>
 
 <!-- Upload Section -->
 <div class="upload-area" id="upload-section">
@@ -2569,5 +2591,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 </script>
+{% endif %}
 </body>
 </html>
