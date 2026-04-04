@@ -2596,6 +2596,35 @@ def get_version(version_id):
     return jsonify(_version_row_to_dict(row))
 
 
+# ── Batch re-analysis ────────────────────────────────────────────
+
+@app.route('/api/ingest/reanalyze-all', methods=['POST'])
+@_require_ingest_auth
+def reanalyze_all():
+    """Queue re-analysis for all songs missing downbeats."""
+    con = _get_db()
+    rows = con.execute(
+        "SELECT DISTINCT video_id, title FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]'"
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        return jsonify({'queued': 0, 'message': 'All songs already have downbeats.'})
+
+    queued = []
+    for r in rows:
+        video_id, title = r[0], r[1] or ''
+        job_id = f'reanalyze-{video_id}-{int(time.time())}'
+        try:
+            _create_job(job_id, video_id, status='pending', message='Queued for re-analysis')
+            _spawn_worker(job_id, video_id, title)
+            queued.append(video_id)
+        except Exception as e:
+            print(f'[SeeChords] Failed to queue {video_id}: {e}', flush=True)
+
+    return jsonify({'queued': len(queued), 'total': len(rows), 'videoIds': queued})
+
+
 # ── Delete a version ──────────────────────────────────────────────
 
 @app.route('/api/ingest/version/<int:version_id>', methods=['DELETE'])

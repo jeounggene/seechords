@@ -356,7 +356,10 @@
   </div>
 
   <div class="upload-area" style="margin-top:12px;">
-    <h2>Saved Versions</h2>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <h2 style="margin:0;">Saved Versions</h2>
+      <button class="btn-primary" id="btn-reanalyze-all" onclick="reanalyzeAll()" style="font-size:0.75em;padding:4px 10px;background:#2a2a50;">Re-analyze All</button>
+    </div>
     <div id="versions-list" style="font-size:0.85em;">Loading...</div>
   </div>
 </div>
@@ -584,6 +587,29 @@ async function loadVersionsList() {
     el.appendChild(table);
   } catch (e) {
     el.textContent = 'Error loading versions.';
+  }
+}
+
+async function reanalyzeAll() {
+  if (!confirm('Re-analyze all songs missing downbeat data? This will spawn worker machines for each song.')) return;
+  const btn = document.getElementById('btn-reanalyze-all');
+  btn.disabled = true;
+  btn.textContent = 'Queuing...';
+  try {
+    const resp = await fetch(API + '/api/ingest/reanalyze-all', { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      btn.textContent = 'Queued ' + data.queued + '/' + data.total;
+      setTimeout(() => { btn.textContent = 'Re-analyze All'; btn.disabled = false; }, 5000);
+    } else {
+      alert('Error: ' + (data.error || 'Unknown'));
+      btn.textContent = 'Re-analyze All';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.textContent = 'Re-analyze All';
+    btn.disabled = false;
   }
 }
 
