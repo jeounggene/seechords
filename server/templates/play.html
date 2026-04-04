@@ -1076,6 +1076,12 @@ function showPhase(name) {
   document.getElementById('playerPhase').style.display  = name === 'player'   ? 'block' : 'none';
   // Site header hides in player mode — player has its own site-style header
   document.querySelector('.header').style.display = name === 'player' ? 'none' : '';
+  // Always reset notFound card state when entering it so stale progress never shows
+  if (name === 'notFound') {
+    document.getElementById('nfProgress').style.display = 'none';
+    document.getElementById('nfProgErr').style.display  = 'none';
+    document.getElementById('nfActions').style.display  = '';
+  }
 }
 
 // ── CHORD_DIAGRAMS ───────────────────────────────────────────
@@ -1729,6 +1735,9 @@ async function loadChords(url) {
       const nfImg  = document.getElementById('nfThumb');
       nfImg.src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
       nfWrap.classList.add('visible');
+      document.getElementById('nfProgress').style.display = 'none';
+      document.getElementById('nfProgErr').style.display = 'none';
+      document.getElementById('nfActions').style.display = '';
       showPhase('notFound');
     }
   } catch {
@@ -1990,7 +1999,7 @@ function initPlayer(data) {
     stopTracking();
     if (ytPlayer) { ytPlayer.stopVideo(); }
     document.removeEventListener('keydown', onKeyNav);
-    showPhase('upload');
+    location.href = '/play';
   });
 
   // ── YouTube IFrame player setup ──

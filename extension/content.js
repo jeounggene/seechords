@@ -1215,6 +1215,14 @@ function formatMinSec(totalSec) {
   return sec ? `${m}m ${sec}s` : `${m}m`;
 }
 
+function friendlyAnalysisError(msg) {
+  const m = (msg || '').toLowerCase();
+  if (m.includes('sign in') || m.includes('not a bot') || m.includes('download failed')) {
+    return 'YouTube temporarily blocked this download. Try again in a few minutes — it usually works after a short wait.';
+  }
+  return 'Error: ' + (msg || 'Analysis failed');
+}
+
 function applyServerJobProgress(data) {
   const track = document.getElementById('scProgressTrack');
   const fill = document.getElementById('scProgressFill');
@@ -1389,11 +1397,11 @@ function pollAnalysisJob(jobId) {
         resumeVideoAfterServerAnalyzeIfNeeded();
       }
     } else if (data.status === 'error') {
-      applyServerJobProgress({ status: 'error', progress: clampJobProgress(data.progress), message: 'Error: ' + (data.message || 'Analysis failed') });
+      applyServerJobProgress({ status: 'error', progress: clampJobProgress(data.progress), message: friendlyAnalysisError(data.message) });
       if (btn) btn.disabled = false;
       resumeVideoAfterServerAnalyzeIfNeeded();
     } else {
-      applyServerJobProgress({ status: 'error', progress: 0, message: 'Error: ' + (data.message || data.status || 'failed') });
+      applyServerJobProgress({ status: 'error', progress: 0, message: friendlyAnalysisError(data.message || data.status) });
       if (btn) btn.disabled = false;
       resumeVideoAfterServerAnalyzeIfNeeded();
     }
@@ -1652,12 +1660,18 @@ function onNavigate() {
   }
 }
 
+function onNavigateIfVisible() {
+  chrome.storage.sync.get('seechordsHidden', ({ seechordsHidden }) => {
+    if (!seechordsHidden) onNavigate();
+  });
+}
+
 // Watch for YouTube SPA navigation
 let lastUrl = location.href;
 observer = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    setTimeout(onNavigate, 800);
+    setTimeout(onNavigateIfVisible, 800);
   }
 });
 observer.observe(document.body, { childList: true, subtree: true });
@@ -1665,7 +1679,7 @@ observer.observe(document.body, { childList: true, subtree: true });
 // Also listen for yt-navigate-finish (YouTube's SPA event)
 window.addEventListener('yt-navigate-finish', () => {
   console.log('[SeeChords] yt-navigate-finish fired');
-  setTimeout(onNavigate, 500);
+  setTimeout(onNavigateIfVisible, 500);
 });
 
 // Initial check — retry until the page is ready
@@ -1678,15 +1692,26 @@ function tryInit(attempts = 0) {
                   document.querySelector('ytd-watch-metadata') ||
                   document.querySelector('ytd-watch-flexy');
     if (ready) {
-      onNavigate();
+      onNavigateIfVisible();
     } else if (attempts < 20) {
       setTimeout(() => tryInit(attempts + 1), 500);
     } else {
       // Force it even without ideal container
-      onNavigate();
+      onNavigateIfVisible();
     }
   } else if (attempts < 10) {
     setTimeout(() => tryInit(attempts + 1), 1000);
   }
 }
 tryInit();
+
+// React to hide toggle while the page is open
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync' || !('seechordsHidden' in changes)) return;
+  if (changes.seechordsHidden.newValue) {
+    removeOverlay();
+    currentVideoId = null;
+  } else {
+    onNavigate();
+  }
+});

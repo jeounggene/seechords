@@ -5,8 +5,10 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 320px;
+      width: 400px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 16px;
+      zoom: 0.7;
       background: #080812;
       color: #f0f0f8;
       padding: 16px;
@@ -22,7 +24,7 @@
       display: inline-flex;
       align-items: center;
       gap: 0.43em;
-      font-size: 1.2rem;
+      font-size: 1.875rem;
       font-weight: 800;
       color: #fff;
     }
@@ -35,7 +37,7 @@
       display: block;
     }
     .tagline {
-      font-size: .75rem;
+      font-size: 1.188rem;
       color: #8888aa;
     }
     .status-card {
@@ -46,12 +48,12 @@
       margin-bottom: 12px;
     }
     .status-title {
-      font-size: .85rem;
+      font-size: 1.312rem;
       font-weight: 600;
       margin-bottom: 6px;
     }
     .status-msg {
-      font-size: .8rem;
+      font-size: 1.25rem;
       color: #8888aa;
       line-height: 1.4;
     }
@@ -59,18 +61,51 @@
     .status-msg.error { color: #ff9966; }
     .vid-id {
       font-family: monospace;
-      font-size: .78rem;
+      font-size: 1.15rem;
       color: #b47bff;
       background: #1a1a36;
       padding: 2px 6px;
       border-radius: 4px;
     }
     .footer {
-      font-size: .7rem;
+      font-size: 1.062rem;
       color: #555;
       text-align: center;
       margin-top: 10px;
     }
+    .hide-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #12122a;
+      border: 1px solid #2a2a50;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .hide-label {
+      font-size: 1.188rem;
+      color: #c0c0dd;
+    }
+    /* Toggle switch */
+    .toggle { position: relative; display: inline-block; width: 2.4em; height: 1.35em; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: #2a2a50; border-radius: 1em;
+      transition: background 0.2s;
+      cursor: pointer;
+    }
+    .toggle input:checked + .toggle-track { background: #7b5ea7; }
+    .toggle-thumb {
+      position: absolute;
+      top: 0.14em; left: 0.14em;
+      width: 1.06em; height: 1.06em;
+      background: #fff; border-radius: 50%;
+      transition: transform 0.2s;
+      pointer-events: none;
+    }
+    .toggle input:checked ~ .toggle-thumb { transform: translateX(1.06em); }
   </style>
 </head>
 <body>
@@ -87,7 +122,16 @@
     <div class="status-msg" id="statusMsg">Looking for current video…</div>
   </div>
 
-  <div class="footer">SeeChords v1.1 — Overlay, panel & fullscreen</div>
+  <div class="hide-row">
+    <span class="hide-label">Hide SeeChords on YouTube</span>
+    <label class="toggle">
+      <input type="checkbox" id="hideToggle" />
+      <span class="toggle-track"></span>
+      <span class="toggle-thumb"></span>
+    </label>
+  </div>
+
+  <div class="footer">SeeChords v1.1.2 — Overlay, panel & fullscreen</div>
 
   <script src="popup.js"></script>
 </body>

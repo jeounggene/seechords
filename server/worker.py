@@ -386,132 +386,149 @@ def main():
             clients = _ytdlp_player_clients_to_try()
             print(f'[Worker] yt-dlp will try player_client order: {clients}', flush=True)
 
-            # Phase 1: Download audio (ChordMini / yt-mp3-go style: yt-dlp bestaudio + ffmpeg later)
-            _update_job(
-                job_id,
-                status='processing',
-                progress=5,
-                message='Downloading from YouTube… (usually 1–3 min — progress updates every ~15s)',
-            )
-            hb_state = {'active': True, 'phase': 'download', 'client': '—'}
-            hb_stop = threading.Event()
-            hb_t = threading.Thread(
-                target=_heartbeat_job_message, args=(job_id, hb_stop, hb_state), daemon=True
-            )
-            hb_t.start()
-            out_template = f'/tmp/{job_id}_audio.%(ext)s'
-
             yt_url = f'https://www.youtube.com/watch?v={video_id}'
             ytdlp = shutil.which('yt-dlp')
             if not ytdlp:
-                hb_state['active'] = False
-                hb_stop.set()
-                hb_t.join(timeout=2.0)
                 raise RuntimeError('yt-dlp not found')
 
-            result = None
-            last_stderr = ''
-            audio_path = ''
-            try:
-                for client in clients:
-                    hb_state['client'] = client
+            out_template = f'/tmp/{job_id}_audio.%(ext)s'
+            MAX_DL_RETRIES = 2
+            last_dl_exc = None
+
+            for dl_attempt in range(MAX_DL_RETRIES + 1):
+                if dl_attempt > 0:
+                    delay = 20 * dl_attempt
+                    print(f'[Worker] Download retry {dl_attempt}/{MAX_DL_RETRIES} in {delay}s…', flush=True)
                     _update_job(
-                        job_id,
-                        status='processing',
-                        progress=5,
-                        message=(
-                            f'Downloading from YouTube… trying “{client}” player '
-                            '(may take up to 3 min)'
-                        ),
+                        job_id, status='processing', progress=5,
+                        message=f'Download failed — retrying in {delay}s… (attempt {dl_attempt + 1}/{MAX_DL_RETRIES + 1})',
                     )
+                    time.sleep(delay)
                     _cleanup_partial_downloads(job_id)
-                    cmd = (
-                        [ytdlp]
-                        + _ytdlp_cookie_args()
-                        + _ytdlp_browser_headers_args()
-                        + _ytdlp_extractor_args_for_client(client)
-                        + [
-                            '-f', 'bestaudio/best',
-                            '--no-playlist', '--no-check-certificates',
-                            '--retries', '3',
-                            '--fragment-retries', '3',
-                            '-o', out_template, yt_url,
-                        ]
-                    )
-                    print(f'[Worker] yt-dlp download try player_client={client}', flush=True)
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-                    last_stderr = result.stderr or ''
-                    audio_path = _find_downloaded_audio_file(job_id) or ''
-                    if result.returncode == 0 and audio_path and os.path.getsize(audio_path) > 0:
-                        _SUCCESS_YTDLP_PLAYER_CLIENT = client
-                        print(f'[Worker] yt-dlp download ok with player_client={client} -> {audio_path}', flush=True)
-                        break
 
-                if result is None or result.returncode != 0 or not audio_path:
-                    err_msg = (
-                        last_stderr[:800]
-                        if last_stderr
-                        else (result.stderr[:800] if result else 'yt-dlp download failed')
-                    )
-                    if 'sign in' in err_msg.lower() or 'not a bot' in err_msg.lower():
-                        if _YTDLP_COOKIE_PATH is None:
-                            err_msg += (
-                                ' — Set YTDLP_COOKIES_B64 on app `seechords`, redeploy API, and worker '
-                                'image. See yt-dlp wiki for PO token if cookies alone fail.'
-                            )
-                        else:
-                            err_msg += (
-                                ' — Tried player clients: '
-                                + ', '.join(clients)
-                                + '. Re-export fresh cookies while logged into YouTube; some videos need '
-                                'yt-dlp PoToken plugins (see yt-dlp wiki / EJS).'
-                            )
-                    raise RuntimeError(f'Download failed: {err_msg}')
-
-                # Get title from yt-dlp if not provided
-                if not title:
-                    try:
-                        pc = _SUCCESS_YTDLP_PLAYER_CLIENT or 'web'
-                        t_result = subprocess.run(
-                            [ytdlp]
-                            + _ytdlp_cookie_args()
-                            + _ytdlp_browser_headers_args()
-                            + _ytdlp_extractor_args_for_client(pc)
-                            + ['--get-title', '--no-playlist', yt_url],
-                            capture_output=True, text=True, timeout=15,
-                        )
-                        if t_result.returncode == 0 and t_result.stdout.strip():
-                            title = t_result.stdout.strip()
-                        else:
-                            title = video_id
-                    except Exception:
-                        title = video_id
-
-                print(f'[Worker] Downloaded audio: {os.path.getsize(audio_path)} bytes', flush=True)
+                # Phase 1: Download audio (ChordMini / yt-mp3-go style: yt-dlp bestaudio + ffmpeg later)
                 _update_job(
                     job_id,
                     status='processing',
-                    progress=15,
-                    message='Download done — converting to WAV…',
+                    progress=5,
+                    message='Downloading from YouTube… (usually 1–3 min — progress updates every ~15s)',
                 )
-
-                hb_state['phase'] = 'ffmpeg'
-                hb_state['progress'] = 15
-                # Phase 2: Convert to WAV
-                subprocess.run(
-                    ['ffmpeg', '-i', audio_path, '-vn', '-ar', '44100', '-ac', '1',
-                     wav_path, '-y'],
-                    capture_output=True, timeout=180,
+                hb_state = {'active': True, 'phase': 'download', 'client': '—'}
+                hb_stop = threading.Event()
+                hb_t = threading.Thread(
+                    target=_heartbeat_job_message, args=(job_id, hb_stop, hb_state), daemon=True
                 )
-                if not os.path.exists(wav_path):
-                    raise RuntimeError('FFmpeg conversion failed')
+                hb_t.start()
 
-                hb_state['phase'] = 'upload'
-                _upload_wav_cache_to_api(wav_path, video_id)
-            finally:
-                hb_state['active'] = False
-                hb_stop.set()
-                hb_t.join(timeout=3.0)
+                result = None
+                last_stderr = ''
+                audio_path = ''
+                try:
+                    for client in clients:
+                        hb_state['client'] = client
+                        _update_job(
+                            job_id,
+                            status='processing',
+                            progress=5,
+                            message=(
+                                f'Downloading from YouTube… trying “{client}” player '
+                                '(may take up to 3 min)'
+                            ),
+                        )
+                        _cleanup_partial_downloads(job_id)
+                        cmd = (
+                            [ytdlp]
+                            + _ytdlp_cookie_args()
+                            + _ytdlp_browser_headers_args()
+                            + _ytdlp_extractor_args_for_client(client)
+                            + [
+                                '-f', 'bestaudio/best',
+                                '--no-playlist', '--no-check-certificates',
+                                '--retries', '3',
+                                '--fragment-retries', '3',
+                                '-o', out_template, yt_url,
+                            ]
+                        )
+                        print(f'[Worker] yt-dlp download try player_client={client}', flush=True)
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                        last_stderr = result.stderr or ''
+                        audio_path = _find_downloaded_audio_file(job_id) or ''
+                        if result.returncode == 0 and audio_path and os.path.getsize(audio_path) > 0:
+                            _SUCCESS_YTDLP_PLAYER_CLIENT = client
+                            print(f'[Worker] yt-dlp download ok with player_client={client} -> {audio_path}', flush=True)
+                            break
+
+                    if result is None or result.returncode != 0 or not audio_path:
+                        err_msg = (
+                            last_stderr[:800]
+                            if last_stderr
+                            else (result.stderr[:800] if result else 'yt-dlp download failed')
+                        )
+                        if 'sign in' in err_msg.lower() or 'not a bot' in err_msg.lower():
+                            if _YTDLP_COOKIE_PATH is None:
+                                err_msg += (
+                                    ' — Set YTDLP_COOKIES_B64 on app `seechords`, redeploy API, and worker '
+                                    'image. See yt-dlp wiki for PO token if cookies alone fail.'
+                                )
+                            else:
+                                err_msg += (
+                                    ' — Tried player clients: '
+                                    + ', '.join(clients)
+                                    + '. Re-export fresh cookies while logged into YouTube; some videos need '
+                                    'yt-dlp PoToken plugins (see yt-dlp wiki / EJS).'
+                                )
+                        last_dl_exc = RuntimeError(f'Download failed: {err_msg}')
+                        continue  # retry
+
+                    # Get title from yt-dlp if not provided
+                    if not title:
+                        try:
+                            pc = _SUCCESS_YTDLP_PLAYER_CLIENT or 'web'
+                            t_result = subprocess.run(
+                                [ytdlp]
+                                + _ytdlp_cookie_args()
+                                + _ytdlp_browser_headers_args()
+                                + _ytdlp_extractor_args_for_client(pc)
+                                + ['--get-title', '--no-playlist', yt_url],
+                                capture_output=True, text=True, timeout=15,
+                            )
+                            if t_result.returncode == 0 and t_result.stdout.strip():
+                                title = t_result.stdout.strip()
+                            else:
+                                title = video_id
+                        except Exception:
+                            title = video_id
+
+                    print(f'[Worker] Downloaded audio: {os.path.getsize(audio_path)} bytes', flush=True)
+                    _update_job(
+                        job_id,
+                        status='processing',
+                        progress=15,
+                        message='Download done — converting to WAV…',
+                    )
+
+                    hb_state['phase'] = 'ffmpeg'
+                    hb_state['progress'] = 15
+                    # Phase 2: Convert to WAV
+                    subprocess.run(
+                        ['ffmpeg', '-i', audio_path, '-vn', '-ar', '44100', '-ac', '1',
+                         wav_path, '-y'],
+                        capture_output=True, timeout=180,
+                    )
+                    if not os.path.exists(wav_path):
+                        raise RuntimeError('FFmpeg conversion failed')
+
+                    hb_state['phase'] = 'upload'
+                    _upload_wav_cache_to_api(wav_path, video_id)
+                    last_dl_exc = None  # success
+                    break
+                finally:
+                    hb_state['active'] = False
+                    hb_stop.set()
+                    hb_t.join(timeout=3.0)
+
+            if last_dl_exc is not None:
+                raise last_dl_exc
 
         # Phase 3: Chord analysis
         _update_job(job_id, status='processing', progress=30, message='Analyzing chords…')

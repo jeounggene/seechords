@@ -3,8 +3,16 @@
 'use strict';
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const titleEl = document.getElementById('statusTitle');
-  const msgEl   = document.getElementById('statusMsg');
+  const titleEl    = document.getElementById('statusTitle');
+  const msgEl      = document.getElementById('statusMsg');
+  const hideToggle = document.getElementById('hideToggle');
+
+  // Load and save the "hide" preference
+  const { seechordsHidden } = await chrome.storage.sync.get('seechordsHidden');
+  hideToggle.checked = !!seechordsHidden;
+  hideToggle.addEventListener('change', () => {
+    chrome.storage.sync.set({ seechordsHidden: hideToggle.checked });
+  });
 
   // Get the active tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
