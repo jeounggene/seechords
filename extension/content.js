@@ -748,6 +748,7 @@ function injectOverlay() {
         <div class="sc-chord-card sc-card-active" id="scCardActive">
           <span class="sc-chord-name"></span>
           <span class="sc-chord-diagram"></span>
+          <div class="sc-chord-progress"><div class="sc-chord-progress-fill" id="scChordProgressFill"></div></div>
         </div>
         <div class="sc-chord-card sc-card-next" id="scCardNext">
           <span class="sc-chord-name"></span>
@@ -1125,6 +1126,20 @@ function applyChordDisplayFromVideoTime(videoTime) {
         activeCard.classList.add('sc-entering');
       }
     }
+  }
+
+  // Update chord progress bar
+  const progressFill = document.getElementById('scChordProgressFill');
+  if (progressFill && chordIdx >= 0 && chordIdx < beatChords.length) {
+    const bc = beatChords[chordIdx];
+    const chordStart = beatTimes[bc.beatStart] || 0;
+    const endBeat = bc.beatStart + bc.beatCount;
+    const chordEnd = endBeat < beatTimes.length ? beatTimes[endBeat] : (chords.length ? chords[chords.length - 1].end : chordStart + 1);
+    const dur = chordEnd - chordStart;
+    const pct = dur > 0 ? Math.min(100, Math.max(0, (t - chordStart) / dur * 100)) : 0;
+    progressFill.style.width = pct + '%';
+  } else if (progressFill) {
+    progressFill.style.width = '0%';
   }
 }
 
