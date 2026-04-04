@@ -1559,7 +1559,7 @@ function fetchVersionsList(videoId, activeVersionId) {
           ? new Date(v.analyzedAt * 1000) : new Date(v.analyzedAt);
         if (!isNaN(d)) date = d.toISOString().slice(0, 16).replace('T', ' ');
       }
-      const label = v.source === 'verified' ? '✓ Verified' : `v${v.versionId}`;
+      const label = v.source === 'verified' ? 'Made by Jin' : 'Made by SeeChords';
       opt.textContent = `${label} · ${v.key || '?'} · ${v.segmentCount} segs · ${date}`;
       if (v.versionId === activeVersionId || v.isActive) opt.selected = true;
       sel.appendChild(opt);
