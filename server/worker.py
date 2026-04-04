@@ -446,6 +446,7 @@ def main():
                                 '--no-playlist', '--no-check-certificates',
                                 '--retries', '3',
                                 '--fragment-retries', '3',
+                                '--remote-components', 'ejs:github',
                                 '-o', out_template, yt_url,
                             ]
                         )
