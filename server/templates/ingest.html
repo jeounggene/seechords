@@ -394,9 +394,6 @@
     <button class="btn-primary" onclick="togglePlayAlong()" id="btn-playalong" style="display:none">
       🎸 Play Along Mode
     </button>
-    <button class="btn-save" id="btn-save" onclick="saveAlignment()">
-      ✅ Approve &amp; Save as Training Data
-    </button>
     <button class="btn-primary" onclick="resetAll()">↩ Start Over</button>
     <span id="save-status"></span>
   </div>
@@ -900,44 +897,6 @@ function playSegment(start, end) {
   });
 }
 
-async function saveAlignment() {
-  const saveBtn = document.getElementById('btn-save');
-  const statusEl = document.getElementById('save-status');
-  saveBtn.disabled = true;
-  statusEl.textContent = 'Saving…';
-  statusEl.style.color = 'var(--warn)';
-
-  // Re-detect base key from edited chords before save.
-  paRedetectKeyFromSegments();
-
-  // Build segments for save — use the (possibly edited) sheetChord
-  const segments = _resolveSegmentsForSave(currentSegments);
-
-  const songName = document.getElementById('song-name')?.value?.trim()
-    || document.querySelector('#info-bar strong')?.textContent
-    || 'unknown';
-
-  try {
-    const resp = await fetch(API + '/api/ingest/' + currentJobId + '/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ segments, songName }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      statusEl.textContent = '❌ ' + (data.error || 'Save failed.');
-      statusEl.style.color = 'var(--hi)';
-      saveBtn.disabled = false;
-      return;
-    }
-    statusEl.textContent = `✅ Saved! ${data.segmentCount} segments → ${data.songName}.lab`;
-    statusEl.style.color = 'var(--ok)';
-  } catch (e) {
-    statusEl.textContent = '❌ Network error: ' + e.message;
-    statusEl.style.color = 'var(--hi)';
-    saveBtn.disabled = false;
-  }
-}
 
 function resetAll() {
   document.getElementById('review-section').classList.add('hidden');
