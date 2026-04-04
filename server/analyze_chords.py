@@ -11,6 +11,11 @@ Inference cascade (first success wins):
   3. Template HMM (hand-crafted chroma templates) -- last resort
 
 Beat detection: Beat This! transformer (ISMIR 2024) with Essentia fallback.
+
+Environment:
+  BTC_BEAT_AGGREGATION — ``logit`` (default): per-beat chord = argmax(sum of
+  smoothed frame logits in beat). ``majority``: legacy per-beat majority vote
+  on filtered frame argmax classes. See ``_btc_beat_aggregation_mode()``.
 """
 import sys
 import os
@@ -557,6 +562,22 @@ def _majority_filter(preds, kernel_size=9):
     return filtered
 
 
+def _btc_beat_aggregation_mode():
+    """How to map frame logits to one chord per beat.
+
+    ``logit`` (default): sum Gaussian-smoothed logits over each beat window, then
+    argmax. Preserves confidence; recommended (Task 2 accuracy plan).
+
+    ``majority``: argmax per frame → majority filter → per-beat majority vote on
+    class indices. Legacy path; set ``BTC_BEAT_AGGREGATION=majority`` if eval
+    regresses after an upgrade.
+    """
+    v = os.environ.get('BTC_BEAT_AGGREGATION', 'logit').strip().lower()
+    if v in ('majority', 'vote', 'legacy'):
+        return 'majority'
+    return 'logit'
+
+
 def _btc_decode_chords(audio_path, beat_times):
     """Run BTC model on CQT features with ChordMini-style inference pipeline.
 
@@ -564,8 +585,9 @@ def _btc_decode_chords(audio_path, beat_times):
     - 75% overlap sliding windows (stride = seq_len * 0.25)
     - Logit accumulation across overlapping windows
     - Gaussian temporal smoothing on averaged logits (kernel=9, sigma=1.5)
-    - Majority filter on final frame predictions
-    - Per-beat majority vote to sync frames to beats
+    - Per-beat chord: see ``_btc_beat_aggregation_mode()`` — default is sum of
+      smoothed logits per beat (``BTC_BEAT_AGGREGATION=logit``); legacy is
+      majority filter on frame argmax then majority vote (``majority``).
     """
     import torch
     from btc_model.vocab import btc_idx_to_display
@@ -610,35 +632,53 @@ def _btc_decode_chords(audio_path, beat_times):
     logit_count[logit_count == 0] = 1.0
     avg_logits = logit_sum / logit_count[:, np.newaxis]
 
-    # Gaussian temporal smoothing on logits before argmax
+    # Gaussian temporal smoothing on logits before beat sync
     avg_logits = _gaussian_smooth_logits(avg_logits, kernel_size=9)
 
-    frame_preds = avg_logits.argmax(axis=1).astype(np.int64)
-
-    # Majority filter to clean up isolated spurious predictions
-    frame_preds = _majority_filter(frame_preds, kernel_size=9)
-
-    # Sync frame-level predictions to beat times via majority vote
+    beat_mode = _btc_beat_aggregation_mode()
     hop_dur = 2048 / 22050.0  # ~0.093s per CQT frame
     beat_chords = []
-    for bi in range(len(beat_times)):
-        t_start = beat_times[bi]
-        t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
-        f_start = max(0, int(round(t_start / hop_dur)))
-        f_end = min(n_frames, int(round(t_end / hop_dur)))
-        if f_end <= f_start:
-            f_end = f_start + 1
-        if f_start >= n_frames:
-            beat_chords.append('N')
-            continue
-        f_end = min(f_end, n_frames)
-        segment = frame_preds[f_start:f_end]
-        if len(segment) == 0:
-            beat_chords.append('N')
-            continue
-        counts = np.bincount(segment, minlength=170)
-        winner = int(counts.argmax())
-        beat_chords.append(btc_idx_to_display(winner))
+
+    if beat_mode == 'majority':
+        frame_preds = avg_logits.argmax(axis=1).astype(np.int64)
+        frame_preds = _majority_filter(frame_preds, kernel_size=9)
+        for bi in range(len(beat_times)):
+            t_start = beat_times[bi]
+            t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
+            f_start = max(0, int(round(t_start / hop_dur)))
+            f_end = min(n_frames, int(round(t_end / hop_dur)))
+            if f_end <= f_start:
+                f_end = f_start + 1
+            if f_start >= n_frames:
+                beat_chords.append('N')
+                continue
+            f_end = min(f_end, n_frames)
+            segment = frame_preds[f_start:f_end]
+            if len(segment) == 0:
+                beat_chords.append('N')
+                continue
+            counts = np.bincount(segment, minlength=170)
+            winner = int(counts.argmax())
+            beat_chords.append(btc_idx_to_display(winner))
+    else:
+        # Logit aggregation: sum smoothed logits in each beat window, single argmax
+        for bi in range(len(beat_times)):
+            t_start = beat_times[bi]
+            t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
+            f_start = max(0, int(round(t_start / hop_dur)))
+            f_end = min(n_frames, int(round(t_end / hop_dur)))
+            if f_end <= f_start:
+                f_end = f_start + 1
+            if f_start >= n_frames:
+                beat_chords.append('N')
+                continue
+            f_end = min(f_end, n_frames)
+            window = avg_logits[f_start:f_end]
+            if len(window) == 0:
+                beat_chords.append('N')
+                continue
+            winner = int(window.sum(axis=0).argmax())
+            beat_chords.append(btc_idx_to_display(winner))
 
     return beat_chords
 
@@ -802,7 +842,7 @@ def _uniformize_beat_times(beat_times, bpm):
 
 
 def _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
-                            skip_silence_gate=False):
+                            skip_silence_gate=False, downbeats=None):
     """Shared post-processing: silence gate, smoothing, merge segments."""
     if not skip_silence_gate and \
        os.environ.get('SILENCE_GATE', '1').lower() not in ('0', 'false', 'no'):
@@ -839,12 +879,15 @@ def _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
         else:
             merged.append({'chord': chord_name, 'start': round(start, 3), 'end': round(end, 3)})
 
-    return {
+    result = {
         'chords':     merged,
         'bpm':        round(float(bpm), 1),
         'key':        key_str,
         'beat_times': [round(b, 3) for b in beat_times],
     }
+    if downbeats:
+        result['downbeats'] = [round(d, 3) for d in downbeats]
+    return result
 
 
 def _estimate_key_from_chroma(beat_chroma_cols):
@@ -878,8 +921,8 @@ def analyze(audio_path):
     if use_btc and use_beat_this and os.path.isfile(_btc_checkpoint_path()):
         try:
             print('[SeeChords] Fast path: Beat This! + BTC', flush=True)
-            beat_times, _downbeats = _detect_beats_beat_this(audio_path)
-            print(f'[SeeChords] Beat This! found {len(beat_times)} beats', flush=True)
+            beat_times, downbeats = _detect_beats_beat_this(audio_path)
+            print(f'[SeeChords] Beat This! found {len(beat_times)} beats, {len(downbeats)} downbeats', flush=True)
             if len(beat_times) >= 2:
                 bpm = 60.0 / np.median(np.diff(beat_times))
             else:
@@ -891,7 +934,8 @@ def analyze(audio_path):
                 chroma = librosa.feature.chroma_cqt(y=y_key, sr=22050)
                 key_str, _ = _estimate_key_from_chroma(chroma)
                 btc_result = _postprocess_and_format(
-                    btc_chords, beat_times, bpm, key_str, audio_path)
+                    btc_chords, beat_times, bpm, key_str, audio_path,
+                    downbeats=downbeats)
                 print(f'[SeeChords] Fast path success: {len(btc_result["chords"])} segments',
                       flush=True)
         except Exception as e:
@@ -912,10 +956,11 @@ def analyze(audio_path):
 
     # ── Beat tracking ──
     beat_times = None
+    downbeats = None
 
     if use_beat_this:
         try:
-            beat_times, _downbeats = _detect_beats_beat_this(audio_path)
+            beat_times, downbeats = _detect_beats_beat_this(audio_path)
             if len(beat_times) >= 2:
                 bpm = 60.0 / np.median(np.diff(beat_times))
             else:
@@ -1081,7 +1126,7 @@ def analyze(audio_path):
             audio_eq, beat_times, final_path, SR, rel_frac=rel)
 
     return _postprocess_and_format(final_path, beat_times, bpm, key_str, audio_path,
-                                   skip_silence_gate=True)
+                                   skip_silence_gate=True, downbeats=downbeats)
 
 
 if __name__ == '__main__':

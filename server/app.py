@@ -129,12 +129,19 @@ def _init_db():
             bpm         REAL,
             chords      TEXT,
             beat_times  TEXT,
+            downbeats   TEXT,
             source      TEXT DEFAULT 'user-uploaded',
             analyzed_at INTEGER,
             is_active   INTEGER DEFAULT 0
         )
     ''')
     con.execute('CREATE INDEX IF NOT EXISTS idx_cv_video ON chord_versions(video_id)')
+    # Migration: add downbeats column if missing
+    try:
+        con.execute('ALTER TABLE chord_versions ADD COLUMN downbeats TEXT')
+        con.commit()
+    except Exception:
+        pass  # column already exists
     con.execute('''
         CREATE TABLE IF NOT EXISTS jobs (
             job_id     TEXT PRIMARY KEY,
@@ -164,7 +171,7 @@ _init_db()
 
 
 _CV_COLS = ['version_id', 'video_id', 'title', 'key', 'bpm',
-            'chords', 'beat_times', 'source', 'analyzed_at', 'is_active']
+            'chords', 'beat_times', 'downbeats', 'source', 'analyzed_at', 'is_active']
 
 
 def _row_to_dict(row, cols):
@@ -184,6 +191,7 @@ def _version_row_to_dict(row):
         'bpm':        d['bpm'],
         'chords':     json.loads(d['chords']) if isinstance(d['chords'], str) else d['chords'],
         'beat_times': json.loads(d['beat_times']) if isinstance(d['beat_times'], str) else d['beat_times'],
+        'downbeats':  json.loads(d['downbeats']) if d.get('downbeats') and isinstance(d['downbeats'], str) else (d.get('downbeats') or []),
         'source':     d['source'],
         'analyzedAt': d['analyzed_at'],
         'isActive':   bool(d['is_active']),
@@ -345,15 +353,16 @@ def _has_verified_version(video_id: str) -> bool:
     return row is not None
 
 
-def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
+def _cache_put(video_id, title, key, bpm, chords_data, beat_times, downbeats=None):
     con = _get_db()
     con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
     con.execute('''
         INSERT INTO chord_versions
-            (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+            (video_id, title, key, bpm, chords, beat_times, downbeats, source, analyzed_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
+          json.dumps(downbeats) if downbeats else None,
           CURRENT_MODEL_SOURCE, int(time.time())))
     con.commit()
     version_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -535,12 +544,13 @@ def detect_chords(audio_path: str, hop_size: float = 0.5):
     try:
         from analyze_chords import analyze as _analyze_chords
         data = _analyze_chords(audio_path)
-        return data['chords'], data['bpm'], data['key'], data['beat_times']
+        return data['chords'], data['bpm'], data['key'], data['beat_times'], data.get('downbeats')
     except Exception as e:
         print(f'[SeeChords] analyze_chords failed, falling back to librosa: {e}')
         import traceback; traceback.print_exc()
 
-    return _detect_chords_librosa(audio_path, hop_size)
+    chords, bpm, key, beat_times = _detect_chords_librosa(audio_path, hop_size)
+    return chords, bpm, key, beat_times, None
 
 
 def _detect_chords_librosa(audio_path: str, hop_size: float = 0.5):
@@ -638,9 +648,9 @@ def _process_job_local(job_id: str, source_path: str, video_id: str, title: str)
             raise RuntimeError('Failed to convert uploaded file to wav.')
 
         _set_job(job_id, status='processing', progress=40, message='Analyzing chords…')
-        chords_data, bpm_val, key_val, beat_times = detect_chords(temp_wav)
+        chords_data, bpm_val, key_val, beat_times, downbeats = detect_chords(temp_wav)
 
-        version_id = _cache_put(video_id, title, key_val, round(bpm_val, 1), chords_data, beat_times)
+        version_id = _cache_put(video_id, title, key_val, round(bpm_val, 1), chords_data, beat_times, downbeats)
 
         _set_job(
             job_id,

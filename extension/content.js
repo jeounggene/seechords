@@ -21,6 +21,7 @@ let currentVideoId  = null;
 let chordData       = null;  // full API response
 let chords          = [];    // [{chord, start, end}, …]
 let beatTimes       = [];
+let downbeatSet     = new Set(); // beat indices that are downbeats
 let beatChords      = [];    // [{chord, beatStart, beatCount}, …]
 let bpm             = 120;
 let baseKey         = '';
@@ -999,7 +1000,7 @@ function renderTimeline() {
   beatTimes.forEach((_, bi) => {
     const div = document.createElement('div');
     div.className = 'sc-beat-block';
-    if (bi % 4 === 0) div.classList.add('sc-measure-start');
+    if (downbeatSet.size > 0 ? downbeatSet.has(bi) : bi % 4 === 0) div.classList.add('sc-measure-start');
     div.dataset.bi = bi;
 
     const gi = beatToGroup[bi];
@@ -1524,6 +1525,19 @@ function loadChordData(data) {
     return c;
   });
   beatTimes = data.beat_times || [];
+  // Build downbeat set: map downbeat timestamps to nearest beat indices
+  downbeatSet = new Set();
+  const db = data.downbeats || [];
+  if (db.length) {
+    db.forEach(dt => {
+      let closest = 0, minDiff = Infinity;
+      for (let i = 0; i < beatTimes.length; i++) {
+        const diff = Math.abs(beatTimes[i] - dt);
+        if (diff < minDiff) { minDiff = diff; closest = i; }
+      }
+      if (minDiff < 0.15) downbeatSet.add(closest);
+    });
+  }
   bpm       = data.bpm        || 120;
   baseKey   = data.key        || '';
   transposeSteps  = 0;

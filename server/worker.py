@@ -220,15 +220,16 @@ def _update_job(job_id, **kwargs):
     con.close()
 
 
-def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
+def _cache_put(video_id, title, key, bpm, chords_data, beat_times, downbeats=None):
     con = _get_db()
     con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
     con.execute('''
         INSERT INTO chord_versions
-            (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, 'btc-v2', ?, 1)
+            (video_id, title, key, bpm, chords, beat_times, downbeats, source, analyzed_at, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'btc-v2', ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
+          json.dumps(downbeats) if downbeats else None,
           int(time.time())))
     con.commit()
     version_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -552,12 +553,13 @@ def main():
         bpm_val = data['bpm']
         key_val = data['key']
         beat_times = data['beat_times']
+        downbeats = data.get('downbeats')
 
         print(f'[Worker] Analysis complete: {len(chords_data)} segments, key={key_val}, bpm={bpm_val}', flush=True)
 
         # Phase 4: Store results in Turso
         _update_job(job_id, status='processing', progress=90, message='Saving results…')
-        version_id = _cache_put(video_id, title, key_val, round(bpm_val, 1), chords_data, beat_times)
+        version_id = _cache_put(video_id, title, key_val, round(bpm_val, 1), chords_data, beat_times, downbeats)
 
         _update_job(
             job_id,
