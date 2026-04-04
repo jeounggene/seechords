@@ -1109,7 +1109,7 @@ function applyChordDisplayFromVideoTime(videoTime) {
         const tlRect = tl.getBoundingClientRect();
         const elRect = active.getBoundingClientRect();
         const target = tl.scrollLeft + (elRect.left - tlRect.left) - (tlRect.width / 2) + (elRect.width / 2);
-        tl.scrollTo({ left: target, behavior: 'smooth' });
+        tl.scrollTo({ left: target, behavior: 'instant' });
       }
     }
   }
