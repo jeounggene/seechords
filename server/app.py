@@ -2675,7 +2675,9 @@ def promote_to_verified(job_id):
             })
 
     con = _get_db()
-    con.execute("DELETE FROM chord_versions WHERE video_id = ?", (video_id,))
+    # Delete previous verified and draft versions; keep model-generated ones
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source IN ('verified', 'ingest-edit')", (video_id,))
+    con.execute('UPDATE chord_versions SET is_active = 0 WHERE video_id = ?', (video_id,))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
