@@ -215,6 +215,26 @@
   .pa-marker { position: absolute; top: -2px; width: 1px; height: 10px;
                 background: rgba(255,255,255,0.15); }
 
+  /* ── Chord Bank ── */
+  .pa-chord-bank {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 10px 14px; background: #0a0a1a;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+  .pa-chord-bank-label {
+    font-size: .72rem; color: #8888aa; white-space: nowrap; margin-right: 4px;
+  }
+  .pa-bank-chip {
+    background: #1a1a36; border: 1px solid #2a2a50; color: #f2f2ff;
+    border-radius: 999px; padding: 5px 12px; cursor: pointer;
+    font-size: .82rem; font-weight: 700; line-height: 1;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+  .pa-bank-chip:hover { background: #24244a; border-color: #6c47ff; transform: translateY(-1px); }
+  .pa-bank-chip-empty {
+    background: transparent; border-style: dashed; color: #66668a; cursor: default;
+  }
+
   /* ── Timeline Editor ── */
   .pa-timeline-wrap {
     padding: 8px 14px 4px;
@@ -394,7 +414,7 @@
     <button class="btn-primary" onclick="togglePlayAlong()" id="btn-playalong" style="display:none">
       🎸 Play Along Mode
     </button>
-    <button class="btn-primary" onclick="resetAll()">↩ Start Over</button>
+    <button class="btn-primary" onclick="backToHome()">↩ Back</button>
     <span id="save-status"></span>
   </div>
 
@@ -417,6 +437,11 @@
       <span class="pa-badge pa-badge-history" id="pa-history-badge" onclick="paToggleHistory()">📋 History
         <div class="pa-versions-dropdown" id="pa-versions-dropdown"></div>
       </span>
+    </div>
+
+    <!-- Chord Bank -->
+    <div class="pa-chord-bank" id="pa-chord-bank">
+      <span class="pa-chord-bank-label">Chord Bank</span>
     </div>
 
     <!-- Timeline Editor (top, beat-block style) -->
@@ -898,26 +923,6 @@ function playSegment(start, end) {
 }
 
 
-function resetAll() {
-  document.getElementById('review-section').classList.add('hidden');
-  document.getElementById('playalong-section').classList.add('hidden');
-  document.getElementById('btn-playalong').style.display = 'none';
-  document.getElementById('status').textContent = '';
-  paActive = false;
-  if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
-  currentJobId = null;
-  currentSegments = [];
-  currentAlignMode = 'beat';
-  currentTranscript = [];
-  _ingestBeatTimes = null;
-  paCurrentIdx = -1;
-  paCurrentLineIdx = -1;
-  paLines = [];
-  if (audioObjectURL) {
-    URL.revokeObjectURL(audioObjectURL);
-    audioObjectURL = null;
-  }
-}
 
 function esc(s) {
   const d = document.createElement('div');
@@ -950,6 +955,54 @@ let paAudioSrc = '';             // stable audio source across history loads
 let paBeatTimes = [];            // time of each beat
 let paBeatChords = [];           // chord name for each beat (empty string = continuation)
 let paCurrentBeatIdx = -1;       // currently playing beat index
+
+function paChordBankValues() {
+  const seen = new Set();
+  const chords = [];
+  currentSegments.forEach(seg => {
+    const chord = _segmentChordForDisplay(seg);
+    if (!chord || seen.has(chord)) return;
+    seen.add(chord);
+    chords.push(chord);
+  });
+  return chords;
+}
+
+function paInsertChordFromBank(baseChord) {
+  if (!baseChord || !paBeatTimes.length) return;
+  const beatIdx = paResolveIndicatorBeat();
+  paBeatChords[beatIdx] = baseChord;
+  paBeatsToSegments();
+  paBuildBeatTimeline();
+  paRenderChordBank();
+  paCurrentBeatIdx = beatIdx;
+  requestAnimationFrame(() => paCenterBeatInTimeline(beatIdx));
+  paCurrentIdx = -1;
+  paUpdate();
+}
+
+function paRenderChordBank() {
+  const bankEl = document.getElementById('pa-chord-bank');
+  if (!bankEl) return;
+  bankEl.innerHTML = '<span class="pa-chord-bank-label">Chord Bank</span>';
+  const chords = paChordBankValues();
+  if (!chords.length) {
+    const empty = document.createElement('span');
+    empty.className = 'pa-bank-chip pa-bank-chip-empty';
+    empty.textContent = 'Add a chord in the timeline, then reuse it here';
+    bankEl.appendChild(empty);
+    return;
+  }
+  chords.forEach(baseChord => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pa-bank-chip';
+    btn.textContent = paToDisplayChord(baseChord);
+    btn.title = 'Insert at the current beat';
+    btn.addEventListener('click', () => paInsertChordFromBank(baseChord));
+    bankEl.appendChild(btn);
+  });
+}
 
 function paResolveIndicatorBeat() {
   if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
@@ -1198,6 +1251,9 @@ function initPlayAlong() {
 
   // Build beat-block timeline
   paBuildBeatTimeline();
+
+  // Render chord bank
+  paRenderChordBank();
 
   // Reset state
   paCurrentIdx = -1;
@@ -1566,6 +1622,7 @@ function paRenderBeatTimeline() {
         paBeatChords[bi] = '';
         paBeatsToSegments();
         paUpdateBeatLabel(bi, div);
+        paRenderChordBank();
         // Remove the X button itself
         del.remove();
       });
@@ -1637,6 +1694,7 @@ function paEditBeat(bi, beatDiv) {
     paBeatsToSegments();
     // Update this beat's label in-place (no full re-render)
     paUpdateBeatLabel(bi, beatDiv);
+    paRenderChordBank();
   };
 
   input.addEventListener('blur', commit);
