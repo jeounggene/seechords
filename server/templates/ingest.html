@@ -484,7 +484,8 @@
         <span class="pa-transpose-label" id="pa-transpose-label">Original</span>
         <button class="pa-transpose-btn" id="pa-transpose-up" onclick="paTransposeBy(1)">▲</button>
       </div>
-      <span class="pa-badge" id="pa-save-badge" onclick="paSaveAndVerify()" style="background:#2a6e2a;cursor:pointer;" title="Save to silver training data and promote as verified">💾 Save & Verify</span>
+      <span class="pa-badge" id="pa-save-draft-badge" onclick="saveDraft()" style="background:#1a1a36;cursor:pointer;border-color:rgba(78,204,163,.25);color:rgba(78,204,163,.75);" title="Save as draft (not visible to users)">Save</span>
+      <span class="pa-badge" id="pa-save-upload-badge" onclick="saveAndUpload()" style="background:#2a6e2a;cursor:pointer;" title="Save and make live for all users">Save &amp; Upload</span>
       <span class="pa-badge pa-badge-history" id="pa-history-badge" onclick="paToggleHistory()">📋 History
         <div class="pa-versions-dropdown" id="pa-versions-dropdown"></div>
       </span>
@@ -868,9 +869,11 @@ async function openLabEditor(filename) {
     }
 
     // Update save badge to save back to .lab
-    const saveBadge = document.getElementById('pa-save-badge');
-    saveBadge.onclick = saveLabFromPlayAlong;
-    saveBadge.textContent = '💾 Save .lab';
+    const saveDraftBadge = document.getElementById('pa-save-draft-badge');
+    const saveUploadBadge = document.getElementById('pa-save-upload-badge');
+    saveDraftBadge.onclick = saveLabFromPlayAlong;
+    saveDraftBadge.textContent = '💾 Save .lab';
+    if (saveUploadBadge) saveUploadBadge.style.display = 'none';
 
     // Hide history badge (not relevant for .lab editing)
     document.getElementById('pa-history-badge').style.display = 'none';
@@ -931,10 +934,12 @@ function closeLabEditor() {
   document.getElementById('pa-back-badge').style.display = 'none';
   document.getElementById('pa-key-badge').style.display = '';
   document.getElementById('pa-bpm-badge').style.display = '';
-  // Restore save badge
-  const saveBadge = document.getElementById('pa-save-badge');
-  saveBadge.onclick = paSaveAndVerify;
-  saveBadge.textContent = '💾 Save & Verify';
+  // Restore save badges
+  const saveDraftBadge = document.getElementById('pa-save-draft-badge');
+  const saveUploadBadge = document.getElementById('pa-save-upload-badge');
+  saveDraftBadge.onclick = saveDraft;
+  saveDraftBadge.textContent = 'Save';
+  if (saveUploadBadge) { saveUploadBadge.style.display = ''; saveUploadBadge.onclick = saveAndUpload; }
   if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
   paActive = false;
   loadVersionsList();
@@ -2618,50 +2623,100 @@ function paEditKey() {
 // ─── Save & History ─────────────────────────────
 let paCurrentVideoId = null;
 
-async function paSaveAndVerify() {
-  paRedetectKeyFromSegments();
-
-  const segments = currentSegments.map(s => ({
-    start: s.start, end: s.end,
+function getCurrentSegments() {
+  return (currentSegments || []).map(s => ({
     chord: s.sheetChord || s.chord || 'N',
+    start: s.start,
+    end: s.end,
   }));
-  const blanks = segments.filter(s => !s.chord).length;
-  if (blanks > segments.length * 0.5) {
-    alert('Too many blank chords (' + blanks + '/' + segments.length + '). Fill in chords first.');
-    return;
-  }
-  const songName = document.getElementById('song-name')?.value?.trim()
-    || document.querySelector('#info-bar strong')?.textContent
-    || 'unknown';
+}
+
+async function saveDraft() {
+  const segments = getCurrentSegments();
+  if (!segments.length) { alert('No chords to save.'); return; }
+
   const videoId = _currentIngestVideoId || paCurrentVideoId;
   if (!videoId || videoId.length !== 11) {
-    alert('A valid YouTube video ID is required. Use YouTube mode or set a video ID.');
+    alert('A valid YouTube video ID is required.');
     return;
   }
-  const bpm = parseFloat(document.getElementById('pa-bpm-badge')?.textContent?.replace('BPM: ', '')) || 120;
-  const badge = document.getElementById('pa-save-badge');
+
+  const songName = _currentSongName || 'unknown';
+  const bpmEl = document.getElementById('pa-bpm-badge');
+  const bpm = parseFloat(bpmEl ? bpmEl.textContent.replace('BPM: ', '') : '120') || 120;
+  const badge = document.getElementById('pa-save-draft-badge');
+
   try {
-    const resp = await fetch(API + '/api/ingest/' + currentJobId + '/promote-verified', {
+    const resp = await fetch(API + '/api/ingest/' + (currentJobId || videoId) + '/save-version', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        segments, songName, videoId,
-        key: paBaseKey || paCurrentKey, bpm,
+        segments: segments,
+        songName: songName,
+        videoId: videoId,
+        key: paBaseKey || paCurrentKey,
+        bpm: bpm,
+        beatTimes: paBeatTimes,
+      }),
+    });
+    const data = await resp.json();
+    if (resp.ok && data.saved) {
+      if (badge) {
+        badge.textContent = 'Saved!';
+        setTimeout(function() { badge.textContent = 'Save'; }, 2000);
+      }
+    } else {
+      alert('Save failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Save error: ' + e.message);
+  }
+}
+
+async function saveAndUpload() {
+  const segments = getCurrentSegments();
+  if (!segments.length) { alert('No chords to save.'); return; }
+
+  const videoId = _currentIngestVideoId || paCurrentVideoId;
+  if (!videoId || videoId.length !== 11) {
+    alert('A valid YouTube video ID is required.');
+    return;
+  }
+
+  const songName = _currentSongName || 'unknown';
+  const bpmEl = document.getElementById('pa-bpm-badge');
+  const bpm = parseFloat(bpmEl ? bpmEl.textContent.replace('BPM: ', '') : '120') || 120;
+  const badge = document.getElementById('pa-save-upload-badge');
+
+  if (!confirm('This will make these chords live for all SeeChords users. Continue?')) return;
+
+  try {
+    const resp = await fetch(API + '/api/ingest/' + (currentJobId || videoId) + '/promote-verified', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        segments: segments,
+        songName: songName,
+        videoId: videoId,
+        key: paBaseKey || paCurrentKey,
+        bpm: bpm,
         beatTimes: paBeatTimes,
       }),
     });
     const data = await resp.json();
     if (resp.ok && data.saved) {
       paCurrentVideoId = data.videoId;
-      badge.textContent = '✅ Saved & Verified!';
-      badge.style.background = '#1a8c1a';
-      setTimeout(() => { badge.textContent = '💾 Save & Verify'; badge.style.background = '#2a6e2a'; }, 3000);
+      if (badge) {
+        badge.textContent = 'Uploaded!';
+        badge.style.background = '#1a8c1a';
+        setTimeout(function() { badge.textContent = 'Save & Upload'; badge.style.background = '#2a6e2a'; }, 3000);
+      }
       paLoadHistory();
     } else {
-      alert('Save failed: ' + (data.error || 'Unknown error'));
+      alert('Upload failed: ' + (data.error || 'Unknown error'));
     }
   } catch (e) {
-    alert('Save error: ' + e.message);
+    alert('Upload error: ' + e.message);
   }
 }
 
