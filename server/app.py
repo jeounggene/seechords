@@ -2591,9 +2591,7 @@ def get_version(version_id):
 @app.route('/api/ingest/<job_id>/promote-verified', methods=['POST'])
 @_require_ingest_auth
 def promote_to_verified(job_id):
-    """Save & verify: writes .lab + audio to both server/verified/ and
-    training/silver/, updates video_map.json, and creates a
-    chord_versions entry with source='verified'."""
+    """Save & Upload: creates a chord_versions entry with source='verified'."""
     data = request.get_json(force=True)
     with _ingest_lock:
         job = _ingest_jobs.get(job_id)
@@ -2609,56 +2607,9 @@ def promote_to_verified(job_id):
     if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
         return jsonify({'error': 'Valid videoId required.'}), 400
 
-    # Sanitise name for filesystem
-    safe_name = re.sub(r'[^\w\s\-]', '', song_name).strip().replace(' ', '_')
-    if not safe_name:
-        safe_name = job_id[:8]
-
-    # Build Isophonics .lab content once
-    lab_lines = []
-    for seg in segments:
-        chord = seg.get('chord', 'N')
-        start = float(seg['start'])
-        end = float(seg['end'])
-        iso = _display_to_iso(chord)
-        lab_lines.append(f'{start:.6f} {end:.6f} {iso}\n')
-    lab_content = ''.join(lab_lines)
-
-    audio_src = job.get('audioPath', '') or _find_ingest_audio_path(job_id)
-
-    # Write labels to both dirs
-    for base_dir in (SERVER_VERIFIED_DIR, TRAINING_VERIFIED_DIR):
-        lbl_dir = os.path.join(base_dir, 'labels')
-        os.makedirs(lbl_dir, exist_ok=True)
-        with open(os.path.join(lbl_dir, f'{safe_name}.lab'), 'w') as f:
-            f.write(lab_content)
-
-    # Audio only to training dir
-    aud_dir = os.path.join(TRAINING_VERIFIED_DIR, 'audio')
-    os.makedirs(aud_dir, exist_ok=True)
-    if audio_src and os.path.exists(audio_src):
-        audio_dest = os.path.join(aud_dir, f'{safe_name}.wav')
-        if not os.path.exists(audio_dest):
-            subprocess.run(
-                ['ffmpeg', '-i', audio_src, '-vn', '-ar', '44100', '-ac', '1',
-                 audio_dest, '-y'],
-                capture_output=True, timeout=180,
-            )
-
-    # Create verified chord_versions entry
-    key_val = _infer_key_from_segments(segments) or job.get('key', '?')
-    bpm_val = round(float(job.get('bpm', 120)), 1)
-    beat_times = job.get('beatTimes', [])
-
-    # Update verified/video_map.json (consolidated metadata)
-    map_path = os.path.join(SERVER_VERIFIED_DIR, 'video_map.json')
-    vmap = {}
-    if os.path.isfile(map_path):
-        with open(map_path) as f:
-            vmap = json.load(f)
-    vmap[safe_name] = {'videoId': video_id, 'title': song_name,
-                       'bpm': bpm_val, 'key': key_val, 'beatTimes': beat_times}
-    _dump_video_map(vmap, map_path)
+    key_val = _infer_key_from_segments(segments) or data.get('key', job.get('key', '?'))
+    bpm_val = round(float(data.get('bpm', job.get('bpm', 120))), 1)
+    beat_times = data.get('beatTimes', job.get('beatTimes', []))
 
     display_chords = []
     for seg in segments:
@@ -2688,7 +2639,6 @@ def promote_to_verified(job_id):
         'promoted': True,
         'versionId': version_id,
         'videoId': video_id,
-        'labPath': os.path.join(SERVER_VERIFIED_DIR, 'labels', f'{safe_name}.lab'),
     })
 
 
