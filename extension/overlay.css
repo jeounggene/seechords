@@ -90,6 +90,9 @@
   border: 1px solid var(--sc-border);
   color: var(--sc-text-muted);
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
 }
 
 .sc-badge-key    { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
