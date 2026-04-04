@@ -1564,12 +1564,16 @@ def _do_ingest_beat_align(job_id, audio_path, chord_text, song_name):
 def _do_ingest_audio_only(job_id, audio_path, song_name):
     """Audio-only ingest: run beat detection, create blank segments for manual chord entry."""
     try:
+        _analysis_start = time.time()
         _update_ingest_job(job_id, {
-            'status': 'processing', 'message': 'Analyzing audio (beat detection)…',
+            'status': 'processing', 'message': 'Loading models and analyzing audio…',
             'songName': song_name,
         })
+        app.logger.info(f'Ingest {job_id}: starting chord analysis for "{song_name}"')
 
         chords_data, bpm_val, key_val, beat_times = detect_chords(audio_path)
+        app.logger.info(f'Ingest {job_id}: analysis done in {int(time.time() - _analysis_start)}s — '
+                        f'key={key_val}, bpm={bpm_val:.1f}, beats={len(beat_times)}')
 
         # Group beats into segments of 4 beats each, with blank chord names
         beats_per_seg = 4
@@ -2195,22 +2199,53 @@ def ingest_youtube():
 
     def _yt_download_and_ingest():
         audio_path = os.path.join(UPLOAD_DIR, f'{job_id}_audio.m4a')
+        _dl_start = time.time()
         try:
             import yt_dlp
             yt_url = f'https://www.youtube.com/watch?v={video_id}'
+
+            def _dl_progress(d):
+                if d.get('status') == 'downloading':
+                    pct = d.get('_percent_str', '').strip()
+                    speed = d.get('_speed_str', '').strip()
+                    eta = d.get('_eta_str', '').strip()
+                    elapsed = int(time.time() - _dl_start)
+                    parts = [f'Downloading audio ({pct})' if pct else f'Downloading audio ({elapsed}s)']
+                    if speed:
+                        parts.append(speed)
+                    if eta:
+                        parts.append(f'ETA {eta}')
+                    _update_ingest_job(job_id, {
+                        'status': 'processing',
+                        'message': ' — '.join(parts),
+                    })
+                elif d.get('status') == 'finished':
+                    _update_ingest_job(job_id, {
+                        'status': 'processing',
+                        'message': 'Download complete, converting…',
+                    })
+
             ydl_opts = {
                 'format': 'bestaudio[ext=m4a]/bestaudio',
                 'outtmpl': audio_path,
                 'noplaylist': True,
                 'quiet': True,
-                'no_warnings': True,
+                'no_warnings': False,
+                'progress_hooks': [_dl_progress],
+                'socket_timeout': 30,
             }
             cf = _ytdlp_cookiefile()
             if cf:
                 ydl_opts['cookiefile'] = cf
+                app.logger.info(f'Ingest {job_id}: using cookie file for yt-dlp')
+            else:
+                app.logger.info(f'Ingest {job_id}: no cookies available')
+
+            app.logger.info(f'Ingest {job_id}: starting download for {video_id}')
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(yt_url, download=True)
                 yt_title = info.get('title', video_id)
+            app.logger.info(f'Ingest {job_id}: download finished in {int(time.time() - _dl_start)}s')
 
             if not os.path.exists(audio_path):
                 _update_ingest_job(job_id, {
@@ -2220,8 +2255,10 @@ def ingest_youtube():
                 return
 
             name = song_name or _clean_title(yt_title)
-            with _ingest_lock:
-                _ingest_jobs[job_id]['message'] = 'Download complete, analyzing…'
+            _update_ingest_job(job_id, {
+                'status': 'processing',
+                'message': f'Download complete, analyzing beats and chords…',
+            })
 
             _do_ingest_audio_only(job_id, audio_path, name)
 
@@ -2232,6 +2269,8 @@ def ingest_youtube():
                     job['audioUrl'] = f'/api/ingest/audio/{job_id}'
 
         except Exception as e:
+            import traceback
+            app.logger.error(f'Ingest {job_id}: download failed — {e}\n{traceback.format_exc()}')
             _update_ingest_job(job_id, {
                 'status': 'error',
                 'message': f'YouTube download failed: {e}',
