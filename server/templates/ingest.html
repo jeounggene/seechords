@@ -411,46 +411,20 @@
   </form>
 </div>
 
-<!-- Upload Section -->
-<div class="upload-area" id="upload-section">
-  <!-- Audio source tabs -->
-  <div class="tab-choice" id="audio-source-tabs">
-    <button class="active" onclick="showAudioTab('file')">Upload MP3</button>
-    <button onclick="showAudioTab('youtube')">YouTube Link</button>
-  </div>
-
-  <div id="audio-file-area" class="row">
-    <div>
-      <label>🎸 Audio file (MP3, WAV, etc.)</label>
-      <input type="file" id="audio-file" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac">
+<div id="home-section">
+  <div class="upload-area">
+    <label>Paste a YouTube link</label>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=..." style="flex:1;">
+      <button class="btn-primary" id="btn-analyze" onclick="startYouTubeIngest()">Analyze</button>
     </div>
+    <div id="status" style="margin-top:8px;"></div>
   </div>
 
-  <div id="audio-youtube-area" class="hidden">
-    <div class="row">
-      <div>
-        <label>🔗 YouTube URL</label>
-        <input type="text" id="youtube-url" placeholder="https://www.youtube.com/watch?v=...">
-      </div>
-    </div>
+  <div class="upload-area" style="margin-top:12px;">
+    <h2>Saved Versions</h2>
+    <div id="versions-list" style="font-size:0.85em;">Loading...</div>
   </div>
-
-  <label>Song name (optional)</label>
-  <input type="text" id="song-name" placeholder="Artist - Song Title">
-
-  <button class="btn-primary" id="btn-ingest" onclick="startIngest()">
-    Upload &amp; Analyze
-  </button>
-  <div id="status"></div>
-</div>
-
-<!-- Saved Training Data -->
-<div id="saved-labs-section" class="upload-area" style="margin-top:12px;">
-  <h2 style="margin-top:0;">📂 Saved Training Data</h2>
-  <p style="font-size:0.8em; color:var(--dim); margin-bottom:10px;">
-    Songs you've reviewed and saved as .lab files for model training.
-  </p>
-  <div id="saved-labs-list" style="font-size:0.85em;">Loading…</div>
 </div>
 
 <!-- Review Section (hidden until alignment is ready) -->
@@ -590,6 +564,7 @@ let currentSegments = [];
 let audioObjectURL = null;
 let currentAlignMode = 'beat';
 let _currentIngestVideoId = null;
+let _currentSongName = '';
 let currentTranscript = [];
 
 // ── Saved Training Data list ──
@@ -618,7 +593,102 @@ async function loadSavedLabs() {
     el.innerHTML = html;
   } catch (e) { el.textContent = 'Error loading saved data.'; }
 }
-document.addEventListener('DOMContentLoaded', loadSavedLabs);
+document.addEventListener('DOMContentLoaded', loadVersionsList);
+
+// ── Home view: versions list ──
+async function loadVersionsList() {
+  const el = document.getElementById('versions-list');
+  if (!el) return;
+  try {
+    const resp = await fetch(API + '/api/ingest/versions');
+    if (resp.status === 401) { location.reload(); return; }
+    const data = await resp.json();
+    const versions = data.versions || [];
+    if (!versions.length) {
+      el.textContent = 'No saved versions yet.';
+      return;
+    }
+    el.innerHTML = '';
+    const table = document.createElement('table');
+    table.className = 'review-table';
+    table.innerHTML = '<thead><tr><th>Title</th><th>Key</th><th>BPM</th><th>Source</th><th>Chords</th><th>Date</th></tr></thead>';
+    const tbody = document.createElement('tbody');
+    for (const v of versions) {
+      const tr = document.createElement('tr');
+      tr.style.cursor = 'pointer';
+      tr.onclick = () => loadSavedVersion(v.versionId, v.videoId);
+      const sourceLabel = v.source === 'verified' ? 'Made by Jin' : 'Draft';
+      const date = new Date(v.analyzedAt * 1000).toLocaleDateString();
+      tr.innerHTML = '<td>' + (v.title || '\u2014') + '</td><td>' + (v.key || '\u2014') + '</td><td>' + (v.bpm || '\u2014') + '</td><td>' + sourceLabel + '</td><td>' + v.segmentCount + '</td><td>' + date + '</td>';
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    el.appendChild(table);
+  } catch (e) {
+    el.textContent = 'Error loading versions.';
+  }
+}
+
+async function loadSavedVersion(versionId, videoId) {
+  document.getElementById('home-section').classList.add('hidden');
+  document.getElementById('review-section').classList.remove('hidden');
+  document.getElementById('playalong-section').classList.remove('hidden');
+
+  try {
+    const resp = await fetch(API + '/api/version/' + versionId);
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+
+    _currentIngestVideoId = videoId;
+    paCurrentVideoId = videoId;
+
+    const chords = typeof data.chords === 'string' ? JSON.parse(data.chords) : data.chords;
+    currentSegments = chords.map(c => ({
+      start: c.start, end: c.end, chord: c.chord,
+    }));
+
+    // Full wiring happens in Task 7 (initPlayAlongFromVersion)
+    if (typeof initPlayAlongFromVersion === 'function') {
+      initPlayAlongFromVersion(data, videoId);
+    }
+  } catch (e) {
+    alert('Error loading version: ' + e.message);
+  }
+}
+
+async function startYouTubeIngest() {
+  const urlInput = document.getElementById('youtube-url');
+  const raw = (urlInput.value || '').trim();
+  const m = raw.match(/(?:v=|youtu\.be\/|\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  if (!m) { alert('Please paste a valid YouTube URL.'); return; }
+  const videoId = m[1];
+
+  document.getElementById('btn-analyze').disabled = true;
+  document.getElementById('status').textContent = 'Analyzing...';
+
+  const form = new FormData();
+  form.append('videoId', videoId);
+
+  try {
+    const resp = await fetch(API + '/api/ingest/youtube', { method: 'POST', body: form });
+    const data = await resp.json();
+    if (data.error) { throw new Error(data.error); }
+    currentJobId = data.jobId;
+    _currentIngestVideoId = videoId;
+    pollIngest();
+  } catch (e) {
+    document.getElementById('status').innerHTML = '<span class="status-error">' + e.message + '</span>';
+    document.getElementById('btn-analyze').disabled = false;
+  }
+}
+
+function backToHome() {
+  document.getElementById('review-section').classList.add('hidden');
+  document.getElementById('playalong-section').classList.add('hidden');
+  document.getElementById('home-section').classList.remove('hidden');
+  if (typeof paStopPlay === 'function') paStopPlay();
+  loadVersionsList();
+}
 
 let _labEditorFilename = null;
 let _labEditorSegments = [];
@@ -712,9 +782,8 @@ async function openLabEditor(filename) {
       console.warn('[LabEditor] No audioUrl in response');
     }
 
-    // Hide upload + saved-labs sections, show review + play along
-    document.getElementById('upload-section').classList.add('hidden');
-    document.getElementById('saved-labs-section').classList.add('hidden');
+    // Hide home section, show review + play along
+    document.getElementById('home-section').classList.add('hidden');
     document.getElementById('review-section').classList.remove('hidden');
     document.getElementById('playalong-section').classList.remove('hidden');
     document.getElementById('btn-playalong').style.display = 'none';
@@ -789,8 +858,7 @@ function closeLabEditor() {
   _labEditorKey = null;
   _labEditorBeatTimes = null;
   // Restore UI
-  document.getElementById('upload-section').classList.remove('hidden');
-  document.getElementById('saved-labs-section').classList.remove('hidden');
+  document.getElementById('home-section').classList.remove('hidden');
   document.getElementById('review-section').classList.add('hidden');
   document.getElementById('playalong-section').classList.add('hidden');
   document.getElementById('btn-playalong').style.display = '';
@@ -805,7 +873,7 @@ function closeLabEditor() {
   saveBadge.textContent = '💾 Save & Verify';
   if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
   paActive = false;
-  loadSavedLabs();
+  loadVersionsList();
 }
 
 let _audioSourceMode = 'file';  // 'file' or 'youtube'
@@ -914,7 +982,7 @@ async function startIngest() {
 
 async function pollIngest() {
   const statusEl = document.getElementById('status');
-  const btn = document.getElementById('btn-ingest');
+  const btn = document.getElementById('btn-analyze');
 
   try {
     const resp = await fetch(API + '/api/ingest/' + currentJobId);
@@ -949,6 +1017,7 @@ async function pollIngest() {
 }
 
 function showReview(data) {
+  document.getElementById('home-section').classList.add('hidden');
   document.getElementById('review-section').classList.remove('hidden');
 
   currentAlignMode = data.alignMode || 'beat';
@@ -1105,7 +1174,7 @@ async function saveAlignment() {
   // Build segments for save — use the (possibly edited) sheetChord
   const segments = _resolveSegmentsForSave(currentSegments);
 
-  const songName = document.getElementById('song-name').value.trim()
+  const songName = document.getElementById('song-name')?.value?.trim()
     || document.querySelector('#info-bar strong')?.textContent
     || 'unknown';
 

@@ -2455,6 +2455,38 @@ def _list_versions(video_id):
     return jsonify({'versions': versions})
 
 
+@app.route('/api/ingest/versions')
+@_require_ingest_auth
+def ingest_all_versions():
+    """List all ingest-created and verified versions for the home page."""
+    con = _get_db()
+    rows = con.execute('''
+        SELECT cv.version_id, cv.video_id, cv.title, cv.key, cv.bpm,
+               cv.source, cv.analyzed_at, cv.is_active, cv.chords
+        FROM chord_versions cv
+        WHERE cv.source IN ('ingest-edit', 'verified')
+        ORDER BY cv.analyzed_at DESC
+    ''').fetchall()
+    con.close()
+
+    versions = []
+    seen_videos = set()
+    for r in rows:
+        d = {
+            'versionId': r[0], 'videoId': r[1], 'title': r[2],
+            'key': r[3], 'bpm': r[4], 'source': r[5],
+            'analyzedAt': r[6], 'isActive': bool(r[7]),
+        }
+        chords = json.loads(r[8]) if isinstance(r[8], str) else (r[8] or [])
+        d['segmentCount'] = len(chords)
+        vid = r[1]
+        if vid in seen_videos:
+            continue
+        seen_videos.add(vid)
+        versions.append(d)
+    return jsonify({'versions': versions})
+
+
 @app.route('/api/version/<int:version_id>')
 def get_version(version_id):
     """Load a specific version by version_id."""
