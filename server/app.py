@@ -2157,9 +2157,10 @@ def ingest_youtube():
     song_name = request.form.get('name', '').strip()
 
     # Check if this video already has chord data — skip re-analysis
+    # Return the full job data inline so the client can render immediately
+    # (avoids multi-machine routing issues with in-memory job store)
     existing = _cache_get(video_id)
     if existing:
-        job_id = str(uuid.uuid4())
         chords = existing.get('chords', [])
         beat_times = existing.get('beat_times', [])
         segments = []
@@ -2174,19 +2175,18 @@ def ingest_youtube():
                 'matches': 1,
                 'match': True,
             })
-        with _ingest_lock:
-            _ingest_jobs[job_id] = {
-                'status': 'done',
-                'alignMode': 'beat',
-                'songName': song_name or existing.get('title', video_id),
-                'key': existing.get('key', '?'),
-                'bpm': existing.get('bpm', 120),
-                'beatTimes': beat_times,
-                'segments': segments,
-                'sheetChords': [],
-                'videoId': video_id,
-            }
-        return jsonify({'jobId': job_id, 'cached': True})
+        return jsonify({
+            'cached': True,
+            'status': 'done',
+            'alignMode': 'beat',
+            'songName': song_name or existing.get('title', video_id),
+            'key': existing.get('key', '?'),
+            'bpm': existing.get('bpm', 120),
+            'beatTimes': beat_times,
+            'segments': segments,
+            'sheetChords': [],
+            'videoId': video_id,
+        })
 
     job_id = str(uuid.uuid4())
 

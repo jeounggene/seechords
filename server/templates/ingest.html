@@ -663,9 +663,18 @@ async function startYouTubeIngest() {
     const resp = await fetch(API + '/api/ingest/youtube', { method: 'POST', body: form });
     const data = await resp.json();
     if (data.error) { throw new Error(data.error); }
-    currentJobId = data.jobId;
     _currentIngestVideoId = videoId;
-    pollIngest();
+    if (data.cached && data.status === 'done') {
+      // Existing chords — render immediately, no polling needed
+      document.getElementById('status').className = 'status-done';
+      document.getElementById('status').textContent = 'Loaded existing chords.';
+      document.getElementById('btn-analyze').disabled = false;
+      currentJobId = videoId;  // use videoId as job key for save operations
+      showReview(data);
+    } else {
+      currentJobId = data.jobId;
+      pollIngest();
+    }
   } catch (e) {
     document.getElementById('status').innerHTML = '<span class="status-error">' + e.message + '</span>';
     document.getElementById('btn-analyze').disabled = false;
