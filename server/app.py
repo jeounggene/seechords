@@ -2598,18 +2598,24 @@ def get_version(version_id):
 
 # ── Batch re-analysis ────────────────────────────────────────────
 
-@app.route('/api/ingest/reanalyze-all', methods=['POST'])
+@app.route('/api/ingest/reanalyze-batch', methods=['POST'])
 @_require_ingest_auth
-def reanalyze_all():
-    """Queue re-analysis for all songs missing downbeats."""
+def reanalyze_batch():
+    """Queue re-analysis for next batch of songs missing downbeats.
+    Call repeatedly until remaining=0."""
+    BATCH_SIZE = 5
     con = _get_db()
     rows = con.execute(
-        "SELECT DISTINCT video_id, title FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]'"
+        "SELECT DISTINCT video_id, title FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]' LIMIT ?",
+        (BATCH_SIZE,),
     ).fetchall()
+    remaining = con.execute(
+        "SELECT COUNT(DISTINCT video_id) FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]'"
+    ).fetchone()[0]
     con.close()
 
     if not rows:
-        return jsonify({'queued': 0, 'message': 'All songs already have downbeats.'})
+        return jsonify({'queued': 0, 'remaining': 0, 'message': 'All songs already have downbeats.'})
 
     queued = []
     for r in rows:
@@ -2622,7 +2628,7 @@ def reanalyze_all():
         except Exception as e:
             print(f'[SeeChords] Failed to queue {video_id}: {e}', flush=True)
 
-    return jsonify({'queued': len(queued), 'total': len(rows), 'videoIds': queued})
+    return jsonify({'queued': len(queued), 'remaining': remaining - len(queued), 'videoIds': queued})
 
 
 # ── Delete a version ──────────────────────────────────────────────
