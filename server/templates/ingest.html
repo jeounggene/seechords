@@ -404,7 +404,6 @@
     <!-- Header with badges -->
     <div class="pa-header">
       <h2>🎸 Play Along</h2>
-      <span class="pa-badge" id="pa-back-badge" onclick="backToHome()" style="display:none;background:var(--accent);cursor:pointer;">↩ Back</span>
       <span class="pa-badge" id="pa-upload-lab-badge" onclick="document.getElementById('labFileInput').click()" style="display:none;background:#1a1a36;cursor:pointer;border-color:rgba(255,165,0,.25);color:rgba(255,165,0,.75);">📂 Upload Label</span>
       <input type="file" id="labFileInput" accept=".lab" style="display:none;" onchange="handleLabUpload(this)">
       <span class="pa-badge pa-badge-key" id="pa-key-badge" title="Song key (fixed base key)">Key: —</span>
@@ -591,8 +590,6 @@ async function loadSavedVersion(versionId, videoId) {
   document.getElementById('review-section').classList.remove('hidden');
   document.getElementById('playalong-section').classList.remove('hidden');
 
-  const backBadge = document.getElementById('pa-back-badge');
-  if (backBadge) { backBadge.style.display = ''; backBadge.onclick = backToHome; }
   const uploadLabBadge = document.getElementById('pa-upload-lab-badge');
   if (uploadLabBadge) uploadLabBadge.style.display = '';
 
@@ -685,7 +682,6 @@ function backToHome() {
   document.getElementById('review-section').classList.add('hidden');
   document.getElementById('playalong-section').classList.add('hidden');
   document.getElementById('home-section').classList.remove('hidden');
-  document.getElementById('pa-back-badge').style.display = 'none';
   document.getElementById('pa-upload-lab-badge').style.display = 'none';
   // Stop playback
   if (ytPlayer && typeof ytPlayer.pauseVideo === 'function') ytPlayer.pauseVideo();
@@ -789,8 +785,6 @@ function showReview(data) {
 
   _currentSongName = data.songName || '';
 
-  const backBadge = document.getElementById('pa-back-badge');
-  if (backBadge) { backBadge.style.display = ''; backBadge.onclick = backToHome; }
   const uploadLabBadge2 = document.getElementById('pa-upload-lab-badge');
   if (uploadLabBadge2) uploadLabBadge2.style.display = '';
 
