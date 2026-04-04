@@ -25,11 +25,11 @@ RUN pip install --no-cache-dir \
     soxr \
     rotary-embedding-torch
 # YouTube changes often — keep yt-dlp current for extractor fixes
-# Install with [default] extras which pulls in optional JS solver deps
+# [default] extras pulls in EJS JS solver + other optional deps
 RUN pip install --no-cache-dir -U "yt-dlp[default]"
-# Pre-download EJS JS-challenge solver so it's baked into the image
-RUN yt-dlp --remote-components ejs:github --simulate --no-playlist \
-    'https://www.youtube.com/watch?v=jNQXAC9IVRw' || true
+# PO token plugin: auto-generates Proof of Origin tokens via headless browser
+# to bypass YouTube bot detection from datacenter IPs
+RUN pip install --no-cache-dir bgutil-ytdlp-pot-provider
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir https://github.com/CPJKU/beat_this/archive/main.zip
 

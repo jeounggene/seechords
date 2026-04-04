@@ -9,6 +9,8 @@ Endpoints:
   GET  /api/health               → diagnostic info
   GET/PUT /api/internal/wav-cache/<videoId> → worker-only WAV cache (Bearer WAV_CACHE_SECRET);
     WAV also mirrored to Turso table wav_cache_backups when WAV_BACKUP_TO_DB=1 (default).
+  GET  /play                        → web chord player (YouTube URL + beat-synced view)
+  GET  /api/youtube-stream/<videoId> → proxy YT audio stream (Range-aware, URL cached 5h)
 """
 import os
 import sys
@@ -22,7 +24,7 @@ import json
 import time
 import subprocess
 
-from flask import Flask, request, jsonify, send_file, render_template
+from flask import Flask, request, jsonify, send_file, render_template, redirect, Response, stream_with_context
 from flask_cors import CORS
 import numpy as np
 try:
@@ -40,6 +42,10 @@ except ImportError:
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
+
+# In-memory cache for resolved YouTube stream URLs (TTL 5h, evicted per-request)
+_yt_stream_cache = {}   # video_id -> {'url': str, 'content_type': str, 'expires': float}
+_yt_stream_lock  = threading.Lock()
 
 TURSO_URL   = os.environ.get('TURSO_DATABASE_URL', '')
 TURSO_TOKEN = os.environ.get('TURSO_AUTH_TOKEN', '')
@@ -63,98 +69,12 @@ def _normalize_ytdlp_cookies_b64(s: str) -> str:
     return ''.join((s or '').split())
 
 
-def _wav_cache_path(video_id: str) -> str:
-    """Path to cached 44.1kHz mono WAV for a YouTube video ID."""
-    return os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')
-
-
-def _wav_backup_to_db_enabled() -> bool:
-    v = (os.environ.get('WAV_BACKUP_TO_DB') or '1').strip().lower()
-    return v not in ('0', 'false', 'no')
-
-
-def _wav_backup_max_bytes() -> int:
-    return int(os.environ.get(
-        'WAV_BACKUP_MAX_BYTES',
-        os.environ.get('WAV_CACHE_MAX_BYTES', str(200 * 1024 * 1024)),
-    ))
-
-
-def _wav_db_backup_put(video_id: str, raw: bytes) -> None:
-    """Mirror WAV to Turso/SQLite so audio survives API disk loss."""
-    if not _wav_backup_to_db_enabled() or not raw:
-        return
-    if len(raw) > _wav_backup_max_bytes():
-        print(f'[SeeChords] WAV DB backup skipped for {video_id} (over WAV_BACKUP_MAX_BYTES)', flush=True)
-        return
-    try:
-        con = _get_db()
-        con.execute(
-            'INSERT OR REPLACE INTO wav_cache_backups (video_id, wav_data, bytes, created_at) '
-            'VALUES (?, ?, ?, ?)',
-            (video_id, raw, len(raw), int(time.time())),
-        )
-        con.commit()
-        con.close()
-        print(f'[SeeChords] WAV DB backup stored {video_id} ({len(raw)} bytes)', flush=True)
-    except Exception as e:
-        print(f'[SeeChords] WAV DB backup failed: {e}', flush=True)
-
-
-def _wav_db_backup_get(video_id: str):
-    """Return WAV bytes from DB or None."""
-    try:
-        con = _get_db()
-        row = con.execute(
-            'SELECT wav_data FROM wav_cache_backups WHERE video_id = ?', (video_id,),
-        ).fetchone()
-        con.close()
-        if not row:
-            return None
-        if isinstance(row, dict):
-            return row.get('wav_data')
-        return row[0]
-    except Exception as e:
-        print(f'[SeeChords] WAV DB read failed: {e}', flush=True)
-        return None
-
-
-def _rehydrate_wav_cache_from_db(video_id: str) -> bool:
-    """Restore filesystem cache from DB if missing or too small."""
-    path = _wav_cache_path(video_id)
-    if os.path.isfile(path) and os.path.getsize(path) >= 4096:
-        return True
-    raw = _wav_db_backup_get(video_id)
-    if not raw or len(raw) < 4096:
-        return False
-    try:
-        os.makedirs(WAV_CACHE_DIR, exist_ok=True)
-        with open(path, 'wb') as f:
-            f.write(raw)
-        os.chmod(path, 0o644)
-        print(f'[SeeChords] Rehydrated WAV cache from DB for {video_id}', flush=True)
-        return True
-    except OSError as e:
-        print(f'[SeeChords] WAV rehydrate from DB failed: {e}', flush=True)
-        return False
-
-
 def _wav_cache_auth_ok() -> bool:
     secret = (os.environ.get('WAV_CACHE_SECRET') or '').strip()
     if not secret:
         return False
     auth = request.headers.get('Authorization', '')
     return auth == f'Bearer {secret}'
-
-
-def _worker_wav_cache_env():
-    """Env for workers: upload/fetch WAV cache via API (internal routes)."""
-    base = (os.environ.get('PUBLIC_APP_URL') or 'https://seechords.fly.dev').strip().rstrip('/')
-    out = {'PUBLIC_APP_URL': base}
-    secret = (os.environ.get('WAV_CACHE_SECRET') or '').strip()
-    if secret:
-        out['WAV_CACHE_SECRET'] = secret
-    return out
 
 
 def _worker_youtube_cookie_env():
@@ -386,7 +306,7 @@ def _import_verified():
     con.commit()
     con.close()
 
-_import_verified()
+# _import_verified() — disabled: verified labels no longer auto-ingest to production DB
 
 
 def _cache_get(video_id: str):
@@ -798,11 +718,10 @@ FLY_WORKER_APP = os.environ.get('FLY_WORKER_APP', 'seechords-worker')
 FLY_WORKER_IMAGE = os.environ.get('FLY_WORKER_IMAGE', f'registry.fly.io/{os.environ.get("FLY_WORKER_APP", "seechords-worker")}:latest')
 
 
-def _spawn_worker(job_id: str, video_id: str, title: str = '', extra_env=None):
+def _spawn_worker(job_id: str, video_id: str, title: str = ''):
     """Spawn an ephemeral Fly Machine to run chord analysis."""
     import requests as req
     cookie_env = _worker_youtube_cookie_env()
-    cache_env = _worker_wav_cache_env()
     if cookie_env.get('YTDLP_COOKIES_B64'):
         n = len(cookie_env['YTDLP_COOKIES_B64'])
         print(f'[SeeChords] Worker spawn: forwarding YTDLP_COOKIES_B64 ({n} base64 chars)', flush=True)
@@ -811,12 +730,6 @@ def _spawn_worker(job_id: str, video_id: str, title: str = '', extra_env=None):
             '[SeeChords] Worker spawn: no cookie payload from API env '
             '(set YTDLP_COOKIES_B64 or YTDLP_COOKIEFILE on app `seechords`; '
             'or set YTDLP_COOKIES_B64 on `seechords-worker` if Fly merges app secrets).',
-            flush=True,
-        )
-    if not cache_env.get('WAV_CACHE_SECRET'):
-        print(
-            '[SeeChords] Worker spawn: WAV_CACHE_SECRET not set — workers cannot upload WAV cache '
-            '(set on app `seechords` for re-analysis without re-download).',
             flush=True,
         )
     machine_env = {
@@ -828,10 +741,11 @@ def _spawn_worker(job_id: str, video_id: str, title: str = '', extra_env=None):
         'USE_BTC': '1',
         'USE_BEAT_THIS': '1',
         **cookie_env,
-        **cache_env,
     }
-    if extra_env:
-        machine_env.update(extra_env)
+    # Forward WAV cache secret so workers can upload/download cached audio
+    wav_secret = os.environ.get('WAV_CACHE_SECRET', '')
+    if wav_secret:
+        machine_env['WAV_CACHE_SECRET'] = wav_secret
     resp = req.post(
         f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
         headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
@@ -853,38 +767,33 @@ def _spawn_worker(job_id: str, video_id: str, title: str = '', extra_env=None):
     return machine_id
 
 
-@app.route('/api/internal/wav-cache/<video_id>', methods=['GET', 'PUT'])
-def internal_wav_cache(video_id):
-    """Store or retrieve cached WAV for a video (workers only; Bearer WAV_CACHE_SECRET)."""
-    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
-        return jsonify({'error': 'Invalid video ID.'}), 400
+
+@app.route('/api/internal/wav-cache-purge', methods=['POST'])
+def purge_wav_cache():
+    """Delete all cached WAV files from disk and DB. Auth: Bearer WAV_CACHE_SECRET."""
     if not _wav_cache_auth_ok():
         return jsonify({'error': 'Unauthorized.'}), 401
-    path = _wav_cache_path(video_id)
-    max_bytes = int(os.environ.get('WAV_CACHE_MAX_BYTES', str(200 * 1024 * 1024)))
-
-    if request.method == 'GET':
-        if (not os.path.isfile(path)) or os.path.getsize(path) < 4096:
-            if not _rehydrate_wav_cache_from_db(video_id):
-                return jsonify({'error': 'Not found.'}), 404
-        return send_file(path, mimetype='audio/wav', as_attachment=False, download_name=f'{video_id}.wav')
-
-    # PUT
-    raw = request.get_data()
-    if not raw or len(raw) < 4096:
-        return jsonify({'error': 'Body too small or empty.'}), 400
-    if len(raw) > max_bytes:
-        return jsonify({'error': 'File too large.'}), 413
+    deleted_files = 0
+    deleted_db = 0
+    # Delete files on disk
+    if os.path.isdir(WAV_CACHE_DIR):
+        for fname in os.listdir(WAV_CACHE_DIR):
+            if fname.endswith('.wav'):
+                try:
+                    os.remove(os.path.join(WAV_CACHE_DIR, fname))
+                    deleted_files += 1
+                except OSError:
+                    pass
+    # Delete DB rows
     try:
-        with open(path, 'wb') as f:
-            f.write(raw)
-        os.chmod(path, 0o644)
-    except OSError as e:
-        print(f'[SeeChords] WAV cache write failed: {e}', flush=True)
-        return jsonify({'error': 'Write failed.'}), 500
-    _wav_db_backup_put(video_id, raw)
-    print(f'[SeeChords] WAV cache stored {video_id} ({len(raw)} bytes)', flush=True)
-    return jsonify({'ok': True, 'bytes': len(raw)})
+        con = _get_db()
+        cur = con.execute('DELETE FROM wav_cache_backups')
+        deleted_db = cur.rowcount
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+    return jsonify({'deletedFiles': deleted_files, 'deletedDbRows': deleted_db})
 
 
 @app.route('/api/analyze-youtube', methods=['POST'])
@@ -904,42 +813,106 @@ def analyze_youtube():
     job_id = str(uuid.uuid4())
     _create_job(job_id, video_id, status='pending', progress=0, message='Queued for analysis…')
 
-    extra_env = {}
-    cache_path = _wav_cache_path(video_id)
-    cached_audio = False
-    has_secret = bool((os.environ.get('WAV_CACHE_SECRET') or '').strip())
-    if has_secret and (
-        (not os.path.isfile(cache_path)) or os.path.getsize(cache_path) < 4096
-    ):
-        _rehydrate_wav_cache_from_db(video_id)
-    if (
-        has_secret
-        and os.path.isfile(cache_path)
-        and os.path.getsize(cache_path) >= 4096
-    ):
-        extra_env['SKIP_YTDLP_DOWNLOAD'] = '1'
-        cached_audio = True
-        print(
-            f'[SeeChords] WAV cache hit for {video_id} ({os.path.getsize(cache_path)} bytes) — skipping download',
-            flush=True,
-        )
-    elif os.path.isfile(cache_path) and os.path.getsize(cache_path) >= 4096 and not has_secret:
-        print(
-            f'[SeeChords] WAV file exists for {video_id} but WAV_CACHE_SECRET unset — '
-            'full YouTube download will run. Set WAV_CACHE_SECRET to enable cache fetch on workers.',
-            flush=True,
-        )
-
     try:
-        machine_id = _spawn_worker(job_id, video_id, title, extra_env=extra_env)
-        msg = 'Worker started…' if not cached_audio else 'Using cached audio…'
-        _set_job(job_id, status='processing', progress=5, message=msg)
+        machine_id = _spawn_worker(job_id, video_id, title)
+        _set_job(job_id, status='processing', progress=5, message='Worker started…')
         print(f'[SeeChords] Spawned worker {machine_id} for job {job_id} / video {video_id}', flush=True)
     except Exception as e:
         print(f'[SeeChords] Worker spawn failed: {e}', flush=True)
         _set_job(job_id, status='error', message=f'Failed to start analysis worker: {e}')
 
-    return jsonify({'job_id': job_id, 'cached': False, 'cached_audio': cached_audio})
+    return jsonify({'job_id': job_id, 'cached': False})
+
+
+def _search_youtube_fast(q, limit=8):
+    """Search YouTube via the InnerTube API — fast, clean JSON, no page parsing."""
+    import requests as req_lib, json
+    resp = req_lib.post(
+        'https://www.youtube.com/youtubei/v1/search',
+        params={'prettyPrint': 'false'},
+        headers={
+            'Content-Type': 'application/json',
+            'X-YouTube-Client-Name': '1',
+            'X-YouTube-Client-Version': '2.20240101.00.00',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
+        json={
+            'query': q,
+            'context': {
+                'client': {
+                    'clientName': 'WEB',
+                    'clientVersion': '2.20240101.00.00',
+                    'hl': 'en',
+                    'gl': 'US',
+                }
+            }
+        },
+        timeout=8,
+    )
+    data = resp.json()
+    items = (data.get('contents', {})
+                 .get('twoColumnSearchResultsRenderer', {})
+                 .get('primaryContents', {})
+                 .get('sectionListRenderer', {})
+                 .get('contents', [{}])[0]
+                 .get('itemSectionRenderer', {})
+                 .get('contents', []))
+    results = []
+    for item in items:
+        vr = item.get('videoRenderer')
+        if not vr:
+            continue
+        vid = vr.get('videoId', '')
+        if not vid or len(vid) != 11:
+            continue
+        title = (vr.get('title', {}).get('runs') or [{}])[0].get('text', '')
+        channel = ((vr.get('ownerText', {}).get('runs') or
+                    vr.get('longBylineText', {}).get('runs') or [{}])[0].get('text', ''))
+        dur = vr.get('lengthText', {}).get('simpleText', '')
+        results.append({'videoId': vid, 'title': title, 'channel': channel,
+                        'duration': dur, 'thumbnail': f'https://i.ytimg.com/vi/{vid}/mqdefault.jpg'})
+        if len(results) >= limit:
+            break
+    return results
+
+
+@app.route('/api/search-youtube')
+def search_youtube():
+    """Search YouTube and return top results. Tries fast page-parse first, falls back to yt-dlp."""
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return jsonify({'error': 'Missing query'}), 400
+    # Fast path: parse YouTube search page directly
+    try:
+        results = _search_youtube_fast(q)
+        if results:
+            return jsonify({'results': results})
+    except Exception as e:
+        print(f'[SeeChords] Fast YT search failed ({e}), falling back to yt-dlp', flush=True)
+    # Fallback: yt-dlp
+    try:
+        import yt_dlp
+        ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True,
+                    'default_search': 'ytsearch8', 'cookiefile': _ytdlp_cookiefile()}
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(q, download=False)
+        entries = info.get('entries') or []
+        results = []
+        for e in entries:
+            vid = e.get('id') or e.get('url', '')
+            if not vid or len(vid) != 11:
+                continue
+            dur = e.get('duration')
+            dur_str = f'{int(dur)//60}:{int(dur)%60:02d}' if dur else ''
+            results.append({'videoId': vid, 'title': e.get('title', ''),
+                            'channel': e.get('uploader') or e.get('channel') or '',
+                            'duration': dur_str,
+                            'thumbnail': f'https://i.ytimg.com/vi/{vid}/mqdefault.jpg'})
+        return jsonify({'results': results})
+    except Exception as e:
+        print(f'[SeeChords] YouTube search error: {e}', flush=True)
+        return jsonify({'error': str(e)}), 500
+
 
 
 @app.route('/api/status/<job_id>')
@@ -1347,7 +1320,7 @@ def align_chords_api():
     # Import DP aligner
     import importlib.util
     align_path = os.path.join(
-        os.path.dirname(__file__), '..', 'training', 'tools', 'align_chords.py')
+        os.path.dirname(__file__), 'tools', 'align_chords.py')
     spec = importlib.util.spec_from_file_location('align_chords', align_path)
     align_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(align_mod)
@@ -1466,7 +1439,7 @@ def _do_ingest_lyric_align(job_id, audio_path, chord_text, song_name):
 
     # Import the lyric aligner
     lyric_align_path = os.path.join(
-        os.path.dirname(__file__), '..', 'training', 'tools', 'lyric_align.py')
+        os.path.dirname(__file__), 'tools', 'lyric_align.py')
     import importlib.util
     spec = importlib.util.spec_from_file_location('lyric_align', lyric_align_path)
     lyric_mod = importlib.util.module_from_spec(spec)
@@ -1554,7 +1527,7 @@ def _do_ingest_beat_align(job_id, audio_path, chord_text, song_name):
 
     # 4. DP alignment
     align_path = os.path.join(
-        os.path.dirname(__file__), '..', 'training', 'tools', 'align_chords.py')
+        os.path.dirname(__file__), 'tools', 'align_chords.py')
     import importlib.util
     spec = importlib.util.spec_from_file_location('align_chords_tool', align_path)
     align_mod = importlib.util.module_from_spec(spec)
@@ -1678,6 +1651,144 @@ def report_bug():
 def play():
     """Web-based chord player: upload audio, get beat-synced chord display."""
     return render_template('play.html')
+
+
+@app.route('/browse')
+def browse():
+    """Browse all analyzed songs in the database."""
+    con = _get_db()
+    rows = con.execute('''
+        SELECT video_id, title, key, bpm, analyzed_at
+        FROM chord_versions
+        WHERE is_active = 1
+        GROUP BY video_id
+        ORDER BY analyzed_at DESC
+    ''').fetchall()
+    con.close()
+    songs = []
+    for r in rows:
+        d = _row_to_dict(r, ['video_id', 'title', 'key', 'bpm', 'analyzed_at'])
+        songs.append({
+            'videoId': d['video_id'],
+            'title': d['title'] or d['video_id'],
+            'key': d['key'] or '',
+            'bpm': round(d['bpm']) if d['bpm'] else '',
+            'thumbnail': f"https://i.ytimg.com/vi/{d['video_id']}/mqdefault.jpg",
+        })
+    return render_template('browse.html', songs=songs)
+
+
+@app.route('/chords/<video_id>')
+def chord_viewer(video_id):
+    """Standalone chord viewer: loads cached chords by video ID, no audio/analysis."""
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return 'Invalid video ID', 400
+    return render_template('chords.html', video_id=video_id)
+
+
+def _resolve_yt_stream(video_id):
+    """Return (stream_url, content_type) for a YouTube video, using a 5-hour in-memory cache."""
+    now = time.time()
+    with _yt_stream_lock:
+        cached = _yt_stream_cache.get(video_id)
+        if cached and cached['expires'] > now:
+            return cached['url'], cached['content_type']
+
+    import yt_dlp
+    import tempfile
+    tmp_cookie = None
+    yt_url = f'https://www.youtube.com/watch?v={video_id}'
+    ydl_opts = {
+        'format': 'bestaudio[ext=m4a]/bestaudio',
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+    }
+    cf = _ytdlp_cookiefile()
+    if cf:
+        ydl_opts['cookiefile'] = cf
+    else:
+        b64 = _normalize_ytdlp_cookies_b64(os.environ.get('YTDLP_COOKIES_B64') or '')
+        if b64:
+            cookie_bytes = base64.b64decode(b64)
+            with tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='wb') as tf:
+                tf.write(cookie_bytes)
+                tmp_cookie = tf.name
+            ydl_opts['cookiefile'] = tmp_cookie
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(yt_url, download=False)
+
+        stream_url = info.get('url')
+        content_type = 'audio/mp4'
+        if not stream_url and info.get('formats'):
+            audio_fmts = [f for f in info['formats']
+                          if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
+            best = audio_fmts[-1] if audio_fmts else info['formats'][-1]
+            stream_url = best.get('url')
+            if best.get('ext') == 'webm':
+                content_type = 'audio/webm'
+
+        if not stream_url:
+            raise ValueError('No stream URL found in yt-dlp response')
+
+        with _yt_stream_lock:
+            _yt_stream_cache[video_id] = {
+                'url': stream_url,
+                'content_type': content_type,
+                'expires': now + 5 * 3600,
+            }
+        return stream_url, content_type
+    finally:
+        if tmp_cookie:
+            try:
+                os.remove(tmp_cookie)
+            except OSError:
+                pass
+
+
+@app.route('/api/youtube-stream/<video_id>')
+def youtube_stream(video_id):
+    """Proxy YouTube audio to the browser, forwarding Range headers so seeking works."""
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+
+    try:
+        stream_url, content_type = _resolve_yt_stream(video_id)
+    except Exception as e:
+        print(f'[SeeChords] YouTube stream resolve failed for {video_id}: {e}', flush=True)
+        return jsonify({'error': f'Stream unavailable: {e}'}), 500
+
+    up_headers = {'User-Agent': 'Mozilla/5.0'}
+    range_hdr = request.headers.get('Range')
+    if range_hdr:
+        up_headers['Range'] = range_hdr
+
+    import requests as req_lib
+    try:
+        upstream = req_lib.get(stream_url, headers=up_headers, stream=True, timeout=30)
+    except Exception as e:
+        print(f'[SeeChords] YouTube proxy fetch failed for {video_id}: {e}', flush=True)
+        return jsonify({'error': 'Upstream fetch failed'}), 502
+
+    resp_headers = {
+        'Content-Type': upstream.headers.get('Content-Type', content_type),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache',
+    }
+    for h in ('Content-Length', 'Content-Range'):
+        if h in upstream.headers:
+            resp_headers[h] = upstream.headers[h]
+
+    def generate():
+        for chunk in upstream.iter_content(chunk_size=65536):
+            if chunk:
+                yield chunk
+
+    return Response(stream_with_context(generate()),
+                    status=upstream.status_code,
+                    headers=resp_headers)
 
 
 @app.route('/ingest')
@@ -2110,8 +2221,6 @@ def ingest_save(job_id):
         end = float(seg['end'])
         iso = _display_to_iso(chord)
         lab_content += f'{start:.6f} {end:.6f} {iso}\n'
-
-    audio_src = job.get('audioPath', '') or _find_ingest_audio_path(job_id)
 
     # Create a chord_versions DB entry so the song appears in the extension
     video_id = job.get('videoId') or safe_name
