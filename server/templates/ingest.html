@@ -407,7 +407,7 @@
     <!-- Header with badges -->
     <div class="pa-header">
       <h2>🎸 Play Along</h2>
-      <span class="pa-badge" id="pa-back-badge" onclick="closeLabEditor()" style="display:none;background:var(--accent);cursor:pointer;">↩ Back</span>
+      <span class="pa-badge" id="pa-back-badge" onclick="backToHome()" style="display:none;background:var(--accent);cursor:pointer;">↩ Back</span>
       <span class="pa-badge pa-badge-key" id="pa-key-badge" title="Song key (fixed base key)">Key: —</span>
       <span class="pa-badge pa-badge-bpm" id="pa-bpm-badge">BPM: —</span>
       <div class="pa-transpose-controls" title="Transpose display (save stays in base key)">
@@ -549,32 +549,6 @@ function initYTPlayerForVideo(videoId) {
   }
 }
 
-// ── Saved Training Data list ──
-async function loadSavedLabs() {
-  const el = document.getElementById('saved-labs-list');
-  try {
-    const res = await fetch(API + '/api/ingest/saved-labs');
-    const labs = await res.json();
-    if (!labs.length) { el.textContent = 'No saved .lab files yet.'; return; }
-    let html = '<table style="width:100%;border-collapse:collapse;">';
-    html += '<tr style="color:var(--dim);font-size:0.8em;"><th style="text-align:left;padding:4px 8px;">Song</th><th style="text-align:right;padding:4px 8px;">Segments</th><th style="text-align:right;padding:4px 8px;">Saved</th><th style="padding:4px 8px;"></th></tr>';
-    for (const lab of labs) {
-      const d = new Date(lab.savedAt * 1000);
-      const ts = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
-      const fn = lab.filename.replace(/'/g, '\'');
-      html += `<tr style="border-bottom:1px solid #222;cursor:pointer;" onclick="openLabEditor('${fn}')">
-        <td style="padding:6px 8px;">${lab.name}</td>
-        <td style="padding:6px 8px;text-align:right;color:var(--dim);">${lab.segments}</td>
-        <td style="padding:6px 8px;text-align:right;color:var(--dim);font-size:0.85em;">${ts}</td>
-        <td style="padding:6px 8px;text-align:right;">
-          <span style="color:var(--ok);font-size:0.85em;">✏️ Edit</span>
-        </td>
-      </tr>`;
-    }
-    html += '</table>';
-    el.innerHTML = html;
-  } catch (e) { el.textContent = 'Error loading saved data.'; }
-}
 document.addEventListener('DOMContentLoaded', loadVersionsList);
 
 // ── Home view: versions list ──
@@ -712,295 +686,9 @@ function backToHome() {
   loadVersionsList();
 }
 
-let _labEditorFilename = null;
-let _labEditorSegments = [];
-let _labEditingMode = false;  // true when Play Along is showing a saved .lab
-let _labEditorBpm = null;     // BPM from DB for lab editing
-let _labEditorKey = null;     // key from DB for lab editing
-let _labEditorBeatTimes = null; // beat_times from DB for lab editing
 let _ingestBeatTimes = null;    // beat_times from fresh ingest result
 
-// ── Isophonics ↔ display chord conversion ────────────────
 
-const _ISO_TO_DISPLAY = {
-  'maj': '', 'min': 'm', '7': '7', 'maj7': 'maj7', 'min7': 'm7',
-  'dim': 'dim', 'dim7': 'dim7', 'hdim7': 'm7b5', 'aug': 'aug',
-  'sus2': 'sus2', 'sus4': 'sus4', '6': '6', 'min6': 'm6', '9': '9',
-  'min9': 'm9', '13': '13', '7b13': '7b13', '7add13': '7add13', '9sus4': '9sus4',
-};
-
-function _isoToDisplay(iso) {
-  if (!iso || iso === 'N') return 'N';
-  // Handle bass note: C:maj/E → save /E for later
-  let bass = '';
-  const slashIdx = iso.indexOf('/');
-  if (slashIdx !== -1) { bass = iso.slice(slashIdx); iso = iso.slice(0, slashIdx); }
-  // Split root:quality
-  const colonIdx = iso.indexOf(':');
-  if (colonIdx === -1) return iso + bass;
-  const root = iso.slice(0, colonIdx);
-  const quality = iso.slice(colonIdx + 1);
-  const suffix = _ISO_TO_DISPLAY[quality];
-  if (suffix !== undefined) return root + suffix + bass;
-  return root + quality + bass;  // unknown quality — pass through
-}
-
-const _DISPLAY_QUALITIES = [
-  // Order matters: longer suffixes first to avoid partial matches
-  ['m7b5', ':hdim7'],
-  ['maj7', ':maj7'], ['min7', ':min7'], ['m7', ':min7'], ['dim7', ':dim7'],
-  ['9sus4', ':9sus4'], ['7b13', ':7b13'], ['7add13', ':7add13'], ['m9', ':min9'],
-  ['sus2', ':sus2'], ['sus4', ':sus4'], ['aug', ':aug'], ['dim', ':dim'],
-  ['add9', ':add9'], ['m6', ':min6'], ['13', ':13'], ['7', ':7'], ['9', ':9'], ['6', ':6'],
-  ['m', ':min'],
-];
-const _ROOT_RE = /^[A-G][b#]?/;
-
-function _displayToIso(name) {
-  if (!name || name === 'N') return 'N';
-  if (name.includes(':')) return name;  // already Isophonics
-  // Handle bass note: C/E → save /E
-  let bass = '';
-  const slashIdx = name.search(/\/[A-G]/);
-  if (slashIdx !== -1) { bass = name.slice(slashIdx); name = name.slice(0, slashIdx); }
-  const rootMatch = name.match(_ROOT_RE);
-  if (!rootMatch) return name + bass;
-  const root = rootMatch[0];
-  const suffix = name.slice(root.length);
-  if (!suffix) return root + ':maj' + bass;
-  for (const [display, iso] of _DISPLAY_QUALITIES) {
-    if (suffix === display) return root + iso + bass;
-  }
-  return root + ':' + suffix + bass;  // unknown suffix — pass through as quality
-}
-
-async function openLabEditor(filename) {
-  // Load saved .lab into Play Along mode
-  try {
-    const res = await fetch(API + '/api/ingest/saved-labs/' + encodeURIComponent(filename));
-    const data = await res.json();
-    if (data.error) { alert(data.error); return; }
-    _labEditorFilename = filename;
-    _labEditingMode = true;
-    _labEditorBpm = data.bpm || null;
-    _labEditorKey = data.key || null;
-    _labEditorBeatTimes = data.beatTimes || null;
-
-    // Convert Isophonics chords back to simple names for display
-    const segs = data.segments.map(s => {
-      let ch = _isoToDisplay(s.chord);
-      return { start: s.start, end: s.end, chord: ch, sheetChord: ch };
-    });
-    currentSegments = segs;
-
-    // Load audio if available
-    const player = document.getElementById('audio-player');
-    if (data.audioUrl) {
-      player.src = data.audioUrl;
-      paAudioSrc = data.audioUrl;
-      player.load();
-      player.onerror = () => console.error('[LabEditor] Audio load error:', player.error);
-    } else {
-      console.warn('[LabEditor] No audioUrl in response');
-    }
-
-    // Hide home section, show review + play along
-    document.getElementById('home-section').classList.add('hidden');
-    document.getElementById('review-section').classList.remove('hidden');
-    document.getElementById('playalong-section').classList.remove('hidden');
-    document.getElementById('btn-playalong').style.display = 'none';
-    document.getElementById('btn-save').style.display = 'none';
-
-    // Update header — show key/bpm if available from DB
-    if (_labEditorKey) {
-      document.getElementById('pa-key-badge').textContent = `Key: ${_labEditorKey}`;
-      document.getElementById('pa-key-badge').style.display = '';
-    } else {
-      document.getElementById('pa-key-badge').style.display = 'none';
-    }
-    if (_labEditorBpm) {
-      document.getElementById('pa-bpm-badge').textContent = `BPM: ${_labEditorBpm}`;
-      document.getElementById('pa-bpm-badge').style.display = '';
-    } else {
-      document.getElementById('pa-bpm-badge').style.display = 'none';
-    }
-
-    // Update save badge to save back to .lab
-    const saveDraftBadge = document.getElementById('pa-save-draft-badge');
-    const saveUploadBadge = document.getElementById('pa-save-upload-badge');
-    saveDraftBadge.onclick = saveLabFromPlayAlong;
-    saveDraftBadge.textContent = '💾 Save .lab';
-    if (saveUploadBadge) saveUploadBadge.style.display = 'none';
-
-    // Hide history badge (not relevant for .lab editing)
-    document.getElementById('pa-history-badge').style.display = 'none';
-    // Show back button
-    document.getElementById('pa-back-badge').style.display = '';
-
-    // Init play along beat timeline
-    paActive = true;
-    initPlayAlong();
-  } catch (e) { alert('Error loading file: ' + e.message); }
-}
-
-async function saveLabFromPlayAlong() {
-  // Collect current chords from Play Along and save back to .lab
-  if (!_labEditorFilename) return;
-  const segs = currentSegments.map(s => {
-    let chord = s.sheetChord || s.chord || 'N';
-    chord = _displayToIso(chord);
-    return { start: s.start, end: s.end, chord: chord };
-  });
-  try {
-    const res = await fetch(API + '/api/ingest/saved-labs/' + encodeURIComponent(_labEditorFilename), {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        segments: segs,
-        bpm: _labEditorBpm,
-        key: _labEditorKey,
-        beatTimes: _labEditorBeatTimes,
-      }),
-    });
-    const data = await res.json();
-    if (data.saved) {
-      alert(`Saved ${data.segmentCount} segments to ${data.filename}`);
-    } else {
-      alert(data.error || 'Save failed');
-    }
-  } catch (e) { alert('Error saving: ' + e.message); }
-}
-
-function closeLabEditor() {
-  _labEditorFilename = null;
-  _labEditingMode = false;
-  _labEditorBpm = null;
-  _labEditorKey = null;
-  _labEditorBeatTimes = null;
-  // Restore UI
-  document.getElementById('home-section').classList.remove('hidden');
-  document.getElementById('review-section').classList.add('hidden');
-  document.getElementById('playalong-section').classList.add('hidden');
-  document.getElementById('btn-playalong').style.display = '';
-  document.getElementById('btn-save').style.display = '';
-  document.getElementById('pa-history-badge').style.display = '';
-  document.getElementById('pa-back-badge').style.display = 'none';
-  document.getElementById('pa-key-badge').style.display = '';
-  document.getElementById('pa-bpm-badge').style.display = '';
-  // Restore save badges
-  const saveDraftBadge = document.getElementById('pa-save-draft-badge');
-  const saveUploadBadge = document.getElementById('pa-save-upload-badge');
-  saveDraftBadge.onclick = saveDraft;
-  saveDraftBadge.textContent = 'Save';
-  if (saveUploadBadge) { saveUploadBadge.style.display = ''; saveUploadBadge.onclick = saveAndUpload; }
-  if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
-  paActive = false;
-  loadVersionsList();
-}
-
-let _audioSourceMode = 'file';  // 'file' or 'youtube'
-
-function showAudioTab(mode) {
-  _audioSourceMode = mode;
-  document.getElementById('audio-file-area').classList.toggle('hidden', mode !== 'file');
-  document.getElementById('audio-youtube-area').classList.toggle('hidden', mode !== 'youtube');
-  document.querySelectorAll('#audio-source-tabs button').forEach((b, i) => {
-    b.classList.toggle('active', (i === 0 && mode === 'file') || (i === 1 && mode === 'youtube'));
-  });
-}
-
-function _extractVideoId(url) {
-  const m = url.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
-  return m ? m[1] : null;
-}
-
-async function startIngest() {
-  const songName = document.getElementById('song-name').value.trim();
-  const statusEl = document.getElementById('status');
-  const btn = document.getElementById('btn-ingest');
-
-  if (_audioSourceMode === 'youtube') {
-    // YouTube mode
-    const ytUrl = document.getElementById('youtube-url').value.trim();
-    const videoId = _extractVideoId(ytUrl);
-    if (!videoId) {
-      statusEl.className = 'status-error';
-      statusEl.textContent = 'Please enter a valid YouTube URL.';
-      return;
-    }
-    _currentIngestVideoId = videoId;
-
-    btn.disabled = true;
-    statusEl.className = 'status-processing';
-    statusEl.textContent = 'Downloading audio from YouTube…';
-
-    const fd = new FormData();
-    fd.append('videoId', videoId);
-    if (songName) fd.append('name', songName);
-
-    if (audioObjectURL) { URL.revokeObjectURL(audioObjectURL); audioObjectURL = null; }
-
-    try {
-      const resp = await fetch(API + '/api/ingest/youtube', { method: 'POST', body: fd });
-      const data = await resp.json();
-      if (!resp.ok) {
-        statusEl.className = 'status-error';
-        statusEl.textContent = data.error || 'Upload failed.';
-        btn.disabled = false;
-        return;
-      }
-      currentJobId = data.jobId;
-      statusEl.textContent = 'Downloading & processing…';
-      pollIngest();
-    } catch (e) {
-      statusEl.className = 'status-error';
-      statusEl.textContent = 'Network error: ' + e.message;
-      btn.disabled = false;
-    }
-    return;
-  }
-
-  // File upload mode
-  const audioInput = document.getElementById('audio-file');
-
-  if (!audioInput.files.length) {
-    statusEl.className = 'status-error';
-    statusEl.textContent = 'Please select an audio file.';
-    return;
-  }
-
-  btn.disabled = true;
-  statusEl.className = 'status-processing';
-  statusEl.textContent = 'Uploading…';
-
-  const fd = new FormData();
-  fd.append('audio', audioInput.files[0]);
-  if (songName) {
-    fd.append('name', songName);
-  }
-
-  // Keep a local URL for the audio player
-  if (audioObjectURL) URL.revokeObjectURL(audioObjectURL);
-  audioObjectURL = URL.createObjectURL(audioInput.files[0]);
-
-  try {
-    const resp = await fetch(API + '/api/ingest', { method: 'POST', body: fd });
-    const data = await resp.json();
-    if (!resp.ok) {
-      statusEl.className = 'status-error';
-      statusEl.textContent = data.error || 'Upload failed.';
-      btn.disabled = false;
-      return;
-    }
-    currentJobId = data.jobId;
-    statusEl.textContent = 'Processing… (beat detection)';
-    pollIngest();
-  } catch (e) {
-    statusEl.className = 'status-error';
-    statusEl.textContent = 'Network error: ' + e.message;
-    btn.disabled = false;
-  }
-}
 
 async function pollIngest() {
   const statusEl = document.getElementById('status');
@@ -1247,7 +935,6 @@ function resetAll() {
   document.getElementById('playalong-section').classList.add('hidden');
   document.getElementById('btn-playalong').style.display = 'none';
   document.getElementById('status').textContent = '';
-  document.getElementById('audio-file').value = '';
   paActive = false;
   if (paAnimFrame) cancelAnimationFrame(paAnimFrame);
   currentJobId = null;
@@ -1513,16 +1200,10 @@ function initPlayAlong() {
   const segs = currentSegments;
   if (!segs.length) return;
 
-  // Header badges — use lab editor metadata if available
-  let key, bpmVal;
-  if (_labEditingMode && _labEditorKey) {
-    key = _labEditorKey;
-    bpmVal = _labEditorBpm ? String(_labEditorBpm) : '?';
-  } else {
-    const infoStrong = document.querySelectorAll('#info-bar strong');
-    key = infoStrong[1]?.textContent || '?';
-    bpmVal = infoStrong[2]?.textContent || '?';
-  }
+  // Header badges — read from info-bar (populated by showReview / initPlayAlongFromVersion)
+  const infoStrong = document.querySelectorAll('#info-bar strong');
+  let key = infoStrong[1]?.textContent || '?';
+  let bpmVal = infoStrong[2]?.textContent || '?';
   paBaseKey = key;
   paCurrentKey = key;
   paTransposeSemitones = 0;
@@ -1782,21 +1463,14 @@ function paBuildBeatTimeline() {
   const segs = currentSegments;
   if (!segs.length) return;
 
-  // Use lab editor beat_times if available, otherwise generate from BPM
-  let bpm;
-  if (_labEditingMode && _labEditorBpm) {
-    bpm = _labEditorBpm;
-  } else {
-    const infoStrong = document.querySelectorAll('#info-bar strong');
-    bpm = parseFloat(infoStrong[2]?.textContent) || 120;
-  }
+  // Determine BPM for beat generation
+  const infoStrong = document.querySelectorAll('#info-bar strong');
+  const bpm = parseFloat(infoStrong[2]?.textContent) || 120;
   const beatInterval = 60 / bpm;
   const totalDur = segs[segs.length - 1].end;
 
-  // Use DB beat_times or ingest beat_times if available, otherwise generate from BPM
-  if (_labEditingMode && _labEditorBeatTimes && _labEditorBeatTimes.length) {
-    paBeatTimes = _labEditorBeatTimes.filter(t => t < totalDur);
-  } else if (_ingestBeatTimes && _ingestBeatTimes.length) {
+  // Use ingest beat_times if available, otherwise generate from BPM
+  if (_ingestBeatTimes && _ingestBeatTimes.length) {
     paBeatTimes = _ingestBeatTimes.filter(t => t < totalDur);
   } else {
     paBeatTimes = [];
