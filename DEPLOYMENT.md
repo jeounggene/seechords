@@ -63,7 +63,7 @@ Set with Fly **per app** where noted. Sensitive values use `fly secrets set`; no
 | `YTDLP_COOKIES_B64` | Base64-encoded **Netscape** `cookies.txt` while logged into YouTube. Forwarded to each worker machine so **yt-dlp** can authenticate. Recommended for production. |
 | `YTDLP_COOKIEFILE` | Alternative: path **on the API VM** to a readable `cookies.txt`; the API reads the file and sends it to workers as base64. Only works if the file exists in the running image or volume (uncommon). |
 | `FLY_WORKER_APP` | Default `seechords-worker` (set in `server/fly.toml`). Override if you rename the worker app. |
-| `FLY_WORKER_IMAGE` | Default `registry.fly.io/seechords-worker:latest`. Override if you use tagged images. |
+| `FLY_WORKER_IMAGE` | Docker image tag for spawned workers (e.g. `registry.fly.io/seechords-worker:deployment-XXXXX`). **Must be updated after each worker deploy** — `./scripts/deploy-worker.sh` does this automatically. |
 | `SEECHORDS_DONATION_URL` / `SEECHORDS_CHROME_STORE_URL` | Marketing site links (optional). |
 
 ### Worker app (`seechords-worker`)
@@ -80,15 +80,26 @@ You *may* set `YTDLP_COOKIES_B64` on `seechords-worker` as well if you rely on F
 
 ### 1. Deploy the worker image (`seechords-worker`)
 
-Builds `Dockerfile.worker` and updates the registry image used when the API spawns machines.
+**Use the deploy script** — it builds the worker image, then automatically updates the API's `FLY_WORKER_IMAGE` secret so spawned workers use the new image:
 
 ```bash
 cd /path/to/seechords
-fly deploy --config fly.worker.toml
+./scripts/deploy-worker.sh            # normal deploy
+./scripts/deploy-worker.sh --no-cache  # force fresh build (use after yt-dlp updates)
 ```
 
 - App name: **`seechords-worker`** (see `fly.worker.toml`).
 - First deploy creates the app if it does not exist (`fly apps create seechords-worker` may be required once).
+
+> **Why the script matters:** The API spawns workers using the `FLY_WORKER_IMAGE` secret. If you deploy the worker with plain `fly deploy` and forget to update that secret, the API keeps spawning the old image. The script handles this automatically.
+
+Manual alternative (not recommended):
+
+```bash
+fly deploy --config fly.worker.toml --remote-only
+# Then manually update the API secret with the image tag from the deploy output:
+fly secrets set FLY_WORKER_IMAGE="registry.fly.io/seechords-worker:deployment-XXXXX" -a seechords
+```
 
 ### 2. Deploy the API (`seechords`)
 
@@ -102,9 +113,9 @@ fly deploy --config server/fly.toml
 
 ### Typical release order
 
-1. Deploy **worker** when `worker.py`, `analyze_chords.py`, models under the worker Dockerfile, or yt-dlp usage changed.
+1. Deploy **worker** (via `./scripts/deploy-worker.sh`) when `worker.py`, `analyze_chords.py`, models under the worker Dockerfile, or yt-dlp usage changed.
 2. Deploy **API** when `app.py`, routes, spawn logic, or API-only code changed.
-3. For a full release touching both, deploy **worker first**, then **API**, so spawned machines always pull a consistent worker image tag (default `latest`).
+3. For a full release touching both, deploy **worker first**, then **API**.
 
 ---
 
