@@ -25,10 +25,11 @@ RUN pip install --no-cache-dir \
     soxr \
     rotary-embedding-torch
 # YouTube changes often — keep yt-dlp current for extractor fixes
-RUN pip install --no-cache-dir -U yt-dlp
-# Pre-download EJS JS-challenge solver components so they're in the image
+# Install with [default] extras which pulls in optional JS solver deps
+RUN pip install --no-cache-dir -U "yt-dlp[default]"
+# Pre-download EJS JS-challenge solver so it's baked into the image
 RUN yt-dlp --remote-components ejs:github --simulate --no-playlist \
-    'https://www.youtube.com/watch?v=jNQXAC9IVRw' 2>/dev/null || true
+    'https://www.youtube.com/watch?v=jNQXAC9IVRw' || true
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir https://github.com/CPJKU/beat_this/archive/main.zip
 

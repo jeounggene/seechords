@@ -172,8 +172,8 @@ def _ytdlp_player_clients_to_try():
     if o and o.lower() not in ('none', 'off', '-'):
         return [o]
     if _YTDLP_COOKIE_PATH:
-        return ['web', 'ios', 'macos', 'android', 'mweb', 'tv_embedded']
-    return ['android', 'ios', 'web', 'macos', 'mweb', 'tv_embedded']
+        return ['web', 'ios', 'android', 'mediaconnect', 'android_embedded', 'tv_embedded', 'mweb']
+    return ['android', 'ios', 'mediaconnect', 'android_embedded', 'tv_embedded', 'web', 'mweb']
 
 
 def _cleanup_partial_downloads(job_id: str) -> None:
