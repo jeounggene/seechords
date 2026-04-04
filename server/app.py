@@ -316,14 +316,18 @@ def _import_verified():
 
 
 def _cache_get(video_id: str):
-    """Return the best version for a video: prefer verified, then active."""
+    """Return the best version for a video: verified > ingest-edit > current model > legacy."""
     con = _get_db()
     row = con.execute(
         '''SELECT * FROM chord_versions
            WHERE video_id = ?
-           ORDER BY (source = 'verified') DESC, is_active DESC, version_id DESC
+           ORDER BY
+             (source = 'verified') DESC,
+             (source = 'ingest-edit') DESC,
+             (source = ?) DESC,
+             version_id DESC
            LIMIT 1''',
-        (video_id,),
+        (video_id, CURRENT_MODEL_SOURCE),
     ).fetchone()
     con.close()
     if row is None:
@@ -2529,8 +2533,12 @@ def _list_versions(video_id):
     rows = con.execute(
         '''SELECT version_id, key, bpm, analyzed_at, is_active, chords, source
            FROM chord_versions WHERE video_id = ?
-           ORDER BY (source = 'verified') DESC, is_active DESC, version_id DESC''',
-        (video_id,),
+           ORDER BY
+             (source = 'verified') DESC,
+             (source = 'ingest-edit') DESC,
+             (source = ?) DESC,
+             version_id DESC''',
+        (video_id, CURRENT_MODEL_SOURCE),
     ).fetchall()
     con.close()
 
