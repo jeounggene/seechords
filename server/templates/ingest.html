@@ -384,6 +384,7 @@
   .pa-controls .pa-btn-play:hover { background: #8264ff; }
   .pa-bpm { font-size: 0.85em; color: var(--dim); }
 </style>
+<script src="https://www.youtube.com/iframe_api"></script>
 </head>
 <body>
 
@@ -434,6 +435,7 @@
 
   <div class="audio-controls">
     <audio id="audio-player" controls></audio>
+    <div id="ytPlayerEl" style="position:absolute;width:1px;height:1px;overflow:hidden;"></div>
   </div>
 
   <p style="font-size:0.78em; color:var(--dim); margin-bottom:8px;">
@@ -567,6 +569,67 @@ let _currentIngestVideoId = null;
 let _currentSongName = '';
 let currentTranscript = [];
 
+// ── YouTube IFrame Player ──
+let ytPlayer = null;
+
+function _isYTPlaying() {
+  return ytPlayer && typeof ytPlayer.getPlayerState === 'function' &&
+         ytPlayer.getPlayerState() === YT.PlayerState.PLAYING;
+}
+
+function _getYTCurrentTime() {
+  return ytPlayer && typeof ytPlayer.getCurrentTime === 'function'
+    ? ytPlayer.getCurrentTime() : 0;
+}
+
+function _getYTDuration() {
+  return ytPlayer && typeof ytPlayer.getDuration === 'function'
+    ? ytPlayer.getDuration() : 0;
+}
+
+window.onYouTubeIframeAPIReady = function() {
+  if (window._ytPendingVideoId) {
+    _createYTPlayer(window._ytPendingVideoId);
+    window._ytPendingVideoId = null;
+  }
+};
+
+function _createYTPlayer(videoId) {
+  if (ytPlayer) { ytPlayer.destroy(); ytPlayer = null; }
+
+  const old = document.getElementById('ytPlayerEl');
+  if (!old) return;
+  const fresh = document.createElement('div');
+  fresh.id = 'ytPlayerEl';
+  old.replaceWith(fresh);
+
+  ytPlayer = new YT.Player('ytPlayerEl', {
+    width: 1, height: 1,
+    videoId,
+    playerVars: { autoplay: 0, controls: 0, rel: 0, fs: 0, disablekb: 1, playsinline: 1 },
+    events: {
+      onReady() { /* player ready */ },
+      onStateChange(e) {
+        if (e.data === YT.PlayerState.PLAYING) {
+          if (typeof startTracking === 'function') startTracking();
+          else if (typeof paStartTracking === 'function') paStartTracking();
+        } else if (e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED) {
+          if (typeof stopTracking === 'function') stopTracking();
+          else if (typeof paStopTracking === 'function') paStopTracking();
+        }
+      },
+    },
+  });
+}
+
+function initYTPlayerForVideo(videoId) {
+  if (typeof YT !== 'undefined' && YT.Player) {
+    _createYTPlayer(videoId);
+  } else {
+    window._ytPendingVideoId = videoId;
+  }
+}
+
 // ── Saved Training Data list ──
 async function loadSavedLabs() {
   const el = document.getElementById('saved-labs-list');
@@ -641,6 +704,7 @@ async function loadSavedVersion(versionId, videoId) {
 
     _currentIngestVideoId = videoId;
     paCurrentVideoId = videoId;
+    initYTPlayerForVideo(videoId);
 
     const chords = typeof data.chords === 'string' ? JSON.parse(data.chords) : data.chords;
     currentSegments = chords.map(c => ({
@@ -1060,6 +1124,9 @@ function showReview(data) {
   // Store beat times from ingest result
   _ingestBeatTimes = data.beatTimes || null;
 
+  // Initialize YT player if this is a YouTube-sourced song
+  if (_currentIngestVideoId) initYTPlayerForVideo(_currentIngestVideoId);
+
   // Build table (hidden) and auto-enter playalong mode
   currentSegments = data.segments;
   renderTable();
@@ -1136,12 +1203,21 @@ function renderTable() {
 
 function playSegment(start, end) {
   const player = document.getElementById('audio-player');
-  player.currentTime = start;
-  player.play();
+  paSeekTo(start);
+  if (ytPlayer && _currentIngestVideoId) {
+    ytPlayer.playVideo();
+  } else if (player) {
+    player.play();
+  }
   // Highlight current segment while playing
   const checkEnd = setInterval(() => {
-    if (player.currentTime >= end || player.paused) {
-      if (player.currentTime >= end) player.pause();
+    const curT = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player ? player.currentTime : 0);
+    const stopped = (ytPlayer && _currentIngestVideoId) ? !_isYTPlaying() : (player ? player.paused : true);
+    if (curT >= end || stopped) {
+      if (curT >= end) {
+        if (ytPlayer && _currentIngestVideoId) ytPlayer.pauseVideo();
+        else if (player) player.pause();
+      }
       clearInterval(checkEnd);
       document.querySelectorAll('.review-table tr.playing').forEach(r =>
         r.classList.remove('playing'));
@@ -1273,7 +1349,7 @@ function paResolveIndicatorBeat() {
     return paCurrentBeatIdx;
   }
   const player = document.getElementById('audio-player');
-  const t = Number(player?.currentTime || 0);
+  const t = Number((ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player?.currentTime || 0));
   let beatIdx = 0;
   for (let i = paBeatTimes.length - 1; i >= 0; i--) {
     if (t >= paBeatTimes[i]) {
@@ -1652,7 +1728,7 @@ function paUpdate() {
   const segs = currentSegments;
   if (!segs.length) return;
 
-  const t = player.currentTime;
+  const t = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player ? player.currentTime : 0);
   const totalDur = segs[segs.length - 1].end;
 
   // Find active segment
@@ -1669,10 +1745,11 @@ function paUpdate() {
   }
 
   // Loop-line: if we've crossed into the next line, jump back
-  if (paLoopLine && paCurrentLineIdx >= 0 && lineIdx !== paCurrentLineIdx && !player.paused) {
+  const _isPlaying = (ytPlayer && _currentIngestVideoId) ? _isYTPlaying() : (player && !player.paused);
+  if (paLoopLine && paCurrentLineIdx >= 0 && lineIdx !== paCurrentLineIdx && _isPlaying) {
     const loopLine = paLines[paCurrentLineIdx];
     if (loopLine) {
-      player.currentTime = segs[loopLine.startIdx].start;
+      paSeekTo(segs[loopLine.startIdx].start);
       paAnimFrame = requestAnimationFrame(paUpdate);
       return;
     }
@@ -1779,7 +1856,8 @@ function paUpdate() {
   }
 
   // ── Play button state ──
-  document.getElementById('pa-play-btn').textContent = player.paused ? '▶' : '⏸';
+  const _paused = (ytPlayer && _currentIngestVideoId) ? !_isYTPlaying() : (player ? player.paused : true);
+  document.getElementById('pa-play-btn').textContent = _paused ? '▶' : '⏸';
 
   // ── Update beat-block timeline ──
   paUpdatePlayhead();
@@ -1806,6 +1884,15 @@ function paUpdate() {
 }
 
 function paTogglePlay() {
+  if (ytPlayer && _currentIngestVideoId) {
+    if (_isYTPlaying()) {
+      ytPlayer.pauseVideo();
+    } else {
+      ytPlayer.playVideo();
+    }
+    return;
+  }
+  // Fallback to audio element
   const player = document.getElementById('audio-player');
   if ((!player.src || player.src === window.location.href) && paAudioSrc) {
     player.src = paAudioSrc;
@@ -1828,16 +1915,30 @@ function paTogglePlay() {
   else player.pause();
 }
 
+function paSeekTo(time) {
+  if (ytPlayer && _currentIngestVideoId) {
+    ytPlayer.seekTo(time, true);
+    return;
+  }
+  const audioEl = document.getElementById('audio-player');
+  if (audioEl) audioEl.currentTime = time;
+}
+
 function paSkip(sec) {
-  const player = document.getElementById('audio-player');
-  player.currentTime = Math.max(0, player.currentTime + sec);
+  const currentTime = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime()
+    : (document.getElementById('audio-player')?.currentTime || 0);
+  paSeekTo(Math.max(0, currentTime + sec));
 }
 
 function paJumpTo(idx) {
-  const player = document.getElementById('audio-player');
   if (currentSegments[idx]) {
-    player.currentTime = currentSegments[idx].start;
-    if (player.paused) player.play();
+    paSeekTo(currentSegments[idx].start);
+    if (ytPlayer && _currentIngestVideoId) {
+      ytPlayer.playVideo();
+    } else {
+      const player = document.getElementById('audio-player');
+      if (player && player.paused) player.play();
+    }
   }
 }
 
@@ -1845,10 +1946,14 @@ function paJumpToLine(lineIdx) {
   if (!paLines[lineIdx]) return;
   const seg = currentSegments[paLines[lineIdx].startIdx];
   if (!seg) return;
-  const player = document.getElementById('audio-player');
-  player.currentTime = seg.start;
+  paSeekTo(seg.start);
   paCurrentLineIdx = lineIdx;
-  if (player.paused) player.play();
+  if (ytPlayer && _currentIngestVideoId) {
+    ytPlayer.playVideo();
+  } else {
+    const player = document.getElementById('audio-player');
+    if (player && player.paused) player.play();
+  }
 }
 
 function paSkipLine(dir) {
@@ -1873,7 +1978,7 @@ function seekProgress(e) {
   const rect = bar.getBoundingClientRect();
   const pct = (e.clientX - rect.left) / rect.width;
   const totalDur = currentSegments[currentSegments.length - 1]?.end || 1;
-  document.getElementById('audio-player').currentTime = pct * totalDur;
+  paSeekTo(pct * totalDur);
 }
 
 function formatTime(s) {
@@ -2050,8 +2155,7 @@ function paRenderBeatTimeline() {
 
     // Click top part of block → seek to this beat (don't auto-play)
     div.addEventListener('click', (e) => {
-      const player = document.getElementById('audio-player');
-      player.currentTime = bt;
+      paSeekTo(bt);
     });
 
     inner.appendChild(div);
@@ -2231,7 +2335,7 @@ async function paCopySection(startLineIdx) {
 
   // 1) Resolve directly from the timeline indicator/playhead time.
   const player = document.getElementById('audio-player');
-  let anchorTime = player ? player.currentTime : 0;
+  let anchorTime = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player ? player.currentTime : 0);
   if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
     anchorTime = paBeatTimes[paCurrentBeatIdx];
   }
@@ -2490,9 +2594,9 @@ function paZoomTimeline(dir) {
 function paUpdatePlayhead() {
   const player = document.getElementById('audio-player');
   const playhead = document.getElementById('pa-playhead');
-  if (!playhead || !player) return;
+  if (!playhead) return;
   // Position playhead based on beat index interpolation
-  const t = player.currentTime;
+  const t = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player ? player.currentTime : 0);
   let bi = 0;
   for (let i = paBeatTimes.length - 1; i >= 0; i--) {
     if (t >= paBeatTimes[i]) { bi = i; break; }
