@@ -24,7 +24,8 @@ import json
 import time
 import subprocess
 
-from flask import Flask, request, jsonify, send_file, render_template, redirect, Response, stream_with_context
+from functools import wraps
+from flask import Flask, request, jsonify, send_file, render_template, redirect, Response, stream_with_context, session
 from flask_cors import CORS
 import numpy as np
 try:
@@ -42,6 +43,8 @@ except ImportError:
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
+INGEST_PASSWORD = os.environ.get('INGEST_PASSWORD', '')
 
 # In-memory cache for resolved YouTube stream URLs (TTL 5h, evicted per-request)
 _yt_stream_cache = {}   # video_id -> {'url': str, 'content_type': str, 'expires': float}
@@ -1791,49 +1794,93 @@ def youtube_stream(video_id):
                     headers=resp_headers)
 
 
+def _require_ingest_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('ingest_auth'):
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized'}), 401
+            return redirect('/ingest')
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/ingest/login', methods=['POST'])
+def ingest_login():
+    password = request.form.get('password', '')
+    if not INGEST_PASSWORD:
+        return redirect('/ingest')
+    if password == INGEST_PASSWORD:
+        session['ingest_auth'] = True
+        return redirect('/ingest')
+    return render_template('ingest.html', login_error='Incorrect password', show_login=True)
+
+
+@app.route('/ingest/logout', methods=['POST'])
+def ingest_logout():
+    session.pop('ingest_auth', None)
+    return redirect('/ingest')
+
+
 @app.route('/ingest')
 def ingest_page():
-    """Serve the chord sheet ingest + review UI."""
-    html_path = os.path.join(os.path.dirname(__file__), 'templates', 'ingest.html')
-    with open(html_path) as f:
-        return f.read()
+    """Serve the chord sheet ingest + review UI (auth-gated)."""
+    if INGEST_PASSWORD and not session.get('ingest_auth'):
+        return render_template('ingest.html', show_login=True)
+    return render_template('ingest.html', show_login=False)
 
 
 @app.route('/api/ingest/saved-labs')
+@_require_ingest_auth
 def list_saved_labs():
-    """List all .lab files saved as training data."""
-    label_dir = os.path.join(SERVER_VERIFIED_DIR, 'labels')
-    if not os.path.isdir(label_dir):
-        return jsonify([])
+    """List all .lab files saved as training data (server + training dirs)."""
     labs = []
-    for f in sorted(os.listdir(label_dir)):
-        if not f.endswith('.lab'):
+    seen = set()
+    label_dirs = [
+        ('server', os.path.join(SERVER_VERIFIED_DIR, 'labels')),
+        ('training', os.path.join(TRAINING_VERIFIED_DIR, 'labels')),
+    ]
+    # Check which files have matching audio
+    audio_dir = os.path.join(TRAINING_VERIFIED_DIR, 'audio')
+    for source, label_dir in label_dirs:
+        if not os.path.isdir(label_dir):
             continue
-        path = os.path.join(label_dir, f)
-        stat = os.stat(path)
-        # Count segments (lines)
-        with open(path) as fh:
-            lines = [l for l in fh if l.strip()]
-        name = f[:-4].replace('_', ' ')  # strip .lab, underscores → spaces
-        labs.append({
-            'filename': f,
-            'name': name,
-            'segments': len(lines),
-            'savedAt': int(stat.st_mtime),
-            'size': stat.st_size,
-        })
+        for f in sorted(os.listdir(label_dir)):
+            if not f.endswith('.lab') or f in seen:
+                continue
+            seen.add(f)
+            path = os.path.join(label_dir, f)
+            stat = os.stat(path)
+            with open(path) as fh:
+                lines = [l for l in fh if l.strip()]
+            stem = f[:-4]
+            name = stem.replace('_', ' ')
+            has_audio = os.path.isfile(os.path.join(audio_dir, f'{stem}.wav'))
+            labs.append({
+                'filename': f,
+                'name': name,
+                'segments': len(lines),
+                'savedAt': int(stat.st_mtime),
+                'size': stat.st_size,
+                'source': source,
+                'hasAudio': has_audio,
+            })
     labs.sort(key=lambda x: x['savedAt'], reverse=True)
     return jsonify(labs)
 
 
 @app.route('/api/ingest/saved-labs/<name>')
+@_require_ingest_auth
 def get_saved_lab(name):
     """Read a saved .lab file and return parsed segments + metadata from DB."""
     # Sanitise to prevent path traversal
     safe = os.path.basename(name)
     if not safe.endswith('.lab'):
         safe += '.lab'
+    # Look in server dir first, then training dir
     path = os.path.join(SERVER_VERIFIED_DIR, 'labels', safe)
+    if not os.path.isfile(path):
+        path = os.path.join(TRAINING_VERIFIED_DIR, 'labels', safe)
     if not os.path.isfile(path):
         return jsonify({'error': 'Not found'}), 404
     segments = []
@@ -1857,20 +1904,24 @@ def get_saved_lab(name):
                 break
 
     # Try to load metadata from video_map.json first (preserves original BPM/key)
-    map_path = os.path.join(SERVER_VERIFIED_DIR, 'video_map.json')
+    # Check video_map.json in both server and training dirs
     bpm = None
     key = None
     beat_times = None
     video_id = None
-    if os.path.isfile(map_path):
-        with open(map_path) as mf:
-            vmap = json.load(mf)
-        entry = vmap.get(stem, {})
-        bpm = entry.get('bpm')
-        key = entry.get('key')
-        beat_times = entry.get('beatTimes')
-        video_id = entry.get('videoId')
-    else:
+    for map_dir in (SERVER_VERIFIED_DIR, TRAINING_VERIFIED_DIR):
+        mp = os.path.join(map_dir, 'video_map.json')
+        if os.path.isfile(mp):
+            with open(mp) as mf:
+                vmap = json.load(mf)
+            entry = vmap.get(stem, {})
+            if entry:
+                bpm = entry.get('bpm')
+                key = entry.get('key')
+                beat_times = entry.get('beatTimes')
+                video_id = entry.get('videoId')
+                break
+    if not video_id:
         # Fall back to fuzzy DB lookup
         stem_lower = stem.replace('_', ' ').lower()
         stem_words = [w for w in stem_lower.split() if len(w) > 2]
@@ -1911,6 +1962,7 @@ def get_saved_lab(name):
 
 
 @app.route('/api/ingest/silver-audio/<path:filename>')
+@_require_ingest_auth
 def serve_silver_audio(filename):
     """Serve an audio file from training verified/audio/."""
     safe = os.path.basename(filename)
@@ -1922,6 +1974,7 @@ def serve_silver_audio(filename):
 
 
 @app.route('/api/ingest/saved-labs/<name>', methods=['PUT'])
+@_require_ingest_auth
 def update_saved_lab(name):
     """Update a saved .lab file with edited segments.
     Also creates a new chord_versions entry when a matching video exists."""
@@ -2033,6 +2086,7 @@ def update_saved_lab(name):
 
 
 @app.route('/api/ingest', methods=['POST'])
+@_require_ingest_auth
 def ingest_upload():
     """Upload audio for beat analysis. Chords are added manually in the UI.
 
@@ -2084,6 +2138,7 @@ def ingest_upload():
 
 
 @app.route('/api/ingest/youtube', methods=['POST'])
+@_require_ingest_auth
 def ingest_youtube():
     """Download audio from YouTube for beat analysis. Chords are added manually.
 
@@ -2156,6 +2211,7 @@ def ingest_youtube():
 
 
 @app.route('/api/ingest/audio/<job_id>')
+@_require_ingest_auth
 def serve_ingest_audio(job_id):
     """Serve a downloaded/uploaded audio file for playback."""
     if not re.match(r'^[a-f0-9-]+$', job_id):
@@ -2180,6 +2236,7 @@ def _find_ingest_audio_path(job_id):
 
 
 @app.route('/api/ingest/<job_id>')
+@_require_ingest_auth
 def ingest_status(job_id):
     """Check ingest job status / get alignment result for review."""
     with _ingest_lock:
@@ -2190,6 +2247,7 @@ def ingest_status(job_id):
 
 
 @app.route('/api/ingest/<job_id>/save', methods=['POST'])
+@_require_ingest_auth
 def ingest_save(job_id):
     """Save reviewed alignment as a .lab file for training.
 
@@ -2303,6 +2361,7 @@ def ingest_save(job_id):
 # ── Save / Load chord versions (Play Along edits) ─────────────────
 
 @app.route('/api/ingest/<job_id>/save-version', methods=['POST'])
+@_require_ingest_auth
 def ingest_save_version(job_id):
     """Save edited segments from Play Along as a new version in chord_versions DB."""
     data = request.get_json(force=True)
@@ -2356,6 +2415,7 @@ def ingest_save_version(job_id):
 
 
 @app.route('/api/ingest/<job_id>/versions')
+@_require_ingest_auth
 def ingest_list_versions(job_id):
     """List all saved versions for an ingest job."""
     video_id = job_id[:11]
@@ -2414,6 +2474,7 @@ def get_version(version_id):
 # ── Promote a version to verified (human-checked) ─────────────────
 
 @app.route('/api/ingest/<job_id>/promote-verified', methods=['POST'])
+@_require_ingest_auth
 def promote_to_verified(job_id):
     """Save & verify: writes .lab + audio to both server/verified/ and
     training/silver/, updates video_map.json, and creates a
