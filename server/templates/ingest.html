@@ -206,75 +206,6 @@
   .pa-lyric-word.pa-word-active { color: var(--ok); font-weight: 700; font-style: normal; }
   .pa-lyric-word.pa-word-past { color: var(--dim); }
 
-  /* ── Line-by-line chord grid ── */
-  .pa-lines-wrap { padding: 12px 14px; background: #0d0d20; }
-  .pa-lines-label {
-    font-size: .75rem; color: #8888aa; margin-bottom: 8px;
-    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
-  }
-  .pa-lines-toggle {
-    display: inline-block; transition: transform .2s; font-size: .7rem;
-  }
-  .pa-lines-wrap.collapsed .pa-lines-toggle { transform: rotate(-90deg); }
-  .pa-lines-wrap.collapsed #pa-lines { display: none; }
-  .pa-lines-label button {
-    font-size: .75rem; padding: 3px 10px; border-radius: 4px;
-    background: #1a1a36; border: 1px solid #2a2a50; color: #b47bff; cursor: pointer;
-  }
-  .pa-lines-label button.active { background: #6c47ff; color: #fff; border-color: #6c47ff; }
-  .pa-chord-bank {
-    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-    padding: 10px 14px; background: #0a0a1a;
-    border-bottom: 1px solid rgba(255,255,255,.07);
-  }
-  .pa-chord-bank-label {
-    font-size: .72rem; color: #8888aa; white-space: nowrap; margin-right: 4px;
-  }
-  .pa-bank-chip {
-    background: #1a1a36; border: 1px solid #2a2a50; color: #f2f2ff;
-    border-radius: 999px; padding: 5px 12px; cursor: pointer;
-    font-size: .82rem; font-weight: 700; line-height: 1;
-    transition: background .15s, border-color .15s, transform .15s;
-  }
-  .pa-bank-chip:hover { background: #24244a; border-color: #6c47ff; transform: translateY(-1px); }
-  .pa-bank-chip-empty {
-    background: transparent; border-style: dashed; color: #66668a; cursor: default;
-  }
-
-  .pa-line {
-    display: flex; gap: 4px; margin-bottom: 6px; align-items: stretch;
-    border-radius: 6px; border: 2px solid transparent; padding: 2px;
-    transition: border-color .2s, background .2s;
-  }
-  .pa-line.pa-line-active { border-color: rgba(255,215,0,.3); background: rgba(255,215,0,.03); }
-  .pa-line.pa-line-past { opacity: .35; }
-  .pa-line-num {
-    display: flex; align-items: center; justify-content: center; min-width: 28px;
-    font-size: .7rem; color: #555; font-weight: 600;
-  }
-  .pa-block {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding: 10px 6px; border-radius: 6px; background: #12122a; border: 1px solid #2a2a50;
-    cursor: pointer; transition: all .15s ease; min-height: 48px; position: relative;
-  }
-  .pa-block:hover { border-color: #444; background: #1a1a36; }
-  .pa-block.pa-block-active {
-    background: rgba(255,215,0,.08); border-color: rgba(255,215,0,.5);
-    box-shadow: 0 0 12px rgba(255,215,0,.1);
-  }
-  .pa-block.pa-block-past { opacity: .5; }
-  .pa-block-chord {
-    font-size: 1.3rem; font-weight: 700; color: #e0e0ff; line-height: 1;
-    outline: none; min-width: 40px; text-align: center;
-  }
-  .pa-block-chord:focus { color: #ffd700; }
-  .pa-block.pa-block-active .pa-block-chord { color: #ffd700; }
-  .pa-block-time { font-size: .65rem; color: #555; margin-top: 3px; }
-  .pa-block-beats {
-    position: absolute; bottom: 2px; right: 4px; font-size: .55rem; color: #444;
-  }
-  .pa-block-word { font-size: .65rem; color: #8ab4f8; margin-top: 2px; font-style: italic; }
-
   /* Progress bar */
   .pa-progress-wrap { position: relative; height: 6px; background: #1a1a36;
                        border-radius: 3px; margin: 0 14px; cursor: pointer; }
@@ -492,9 +423,6 @@
     </div>
 
     <!-- Timeline Editor (top, beat-block style) -->
-    <div class="pa-chord-bank" id="pa-chord-bank">
-      <span class="pa-chord-bank-label">Chord Bank</span>
-    </div>
     <div class="pa-timeline-wrap">
       <div class="pa-timeline-header">
         <span>⏱ Beat Timeline — double-click a beat to change chord</span>
@@ -539,16 +467,6 @@
 
     <!-- Lyric line (lyric mode) -->
     <div class="pa-lyric-line" id="pa-lyric-line" style="display:none"></div>
-
-    <!-- Line-by-line chord grid (4 chords per line, editable) -->
-    <div class="pa-lines-wrap collapsed">
-      <div class="pa-lines-label" onclick="paToggleChordLines(event)">
-        <span class="pa-lines-toggle">▼</span>
-        <span>Chord Lines</span>
-        <button id="pa-loop-line-btn" onclick="paToggleLoopLine()">Loop Line</button>
-      </div>
-      <div id="pa-lines"></div>
-    </div>
 
     <!-- Progress bar -->
     <div class="pa-progress-wrap" id="pa-progress-wrap" onclick="seekProgress(event)">
@@ -880,12 +798,8 @@ async function openLabEditor(filename) {
     // Show back button
     document.getElementById('pa-back-badge').style.display = '';
 
-    // Init play along grid + beat timeline
+    // Init play along beat timeline
     paActive = true;
-    paLines = [];
-    for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
-      paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
-    }
     initPlayAlong();
   } catch (e) { alert('Error loading file: ' + e.message); }
 }
@@ -1296,7 +1210,6 @@ function resetAll() {
   _ingestBeatTimes = null;
   paCurrentIdx = -1;
   paCurrentLineIdx = -1;
-  paLoopLine = false;
   paLines = [];
   if (audioObjectURL) {
     URL.revokeObjectURL(audioObjectURL);
@@ -1324,8 +1237,7 @@ let paActive = false;
 let paAnimFrame = null;
 let paCurrentIdx = -1;
 let paCurrentLineIdx = -1;
-let paLoopLine = false;
-let paLines = [];        // [{startIdx, endIdx}, …] — groups of 4 segments
+let paLines = [];        // [{startIdx, endIdx}, …] — groups of 4 segments for Prev/Next Line transport
 const PA_CHORDS_PER_LINE = 4;
 let paCurrentKey = '?';          // display key (user-shifted)
 let paBaseKey = '?';             // original key used for saving
@@ -1336,18 +1248,6 @@ let paAudioSrc = '';             // stable audio source across history loads
 let paBeatTimes = [];            // time of each beat
 let paBeatChords = [];           // chord name for each beat (empty string = continuation)
 let paCurrentBeatIdx = -1;       // currently playing beat index
-
-function paChordBankValues() {
-  const seen = new Set();
-  const chords = [];
-  currentSegments.forEach(seg => {
-    const chord = _segmentChordForDisplay(seg);
-    if (!chord || seen.has(chord)) return;
-    seen.add(chord);
-    chords.push(chord);
-  });
-  return chords;
-}
 
 function paResolveIndicatorBeat() {
   if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
@@ -1363,44 +1263,6 @@ function paResolveIndicatorBeat() {
     }
   }
   return Math.max(0, Math.min(beatIdx, Math.max(0, paBeatTimes.length - 1)));
-}
-
-function paInsertChordFromBank(baseChord) {
-  if (!baseChord || !paBeatTimes.length) return;
-  const beatIdx = paResolveIndicatorBeat();
-  paBeatChords[beatIdx] = baseChord;
-  paBeatsToSegments();
-  paBuildBeatTimeline();
-  initPlayAlongGrid();
-  paCurrentBeatIdx = beatIdx;
-  requestAnimationFrame(() => paCenterBeatInTimeline(beatIdx));
-  paCurrentIdx = -1;
-  paUpdate();
-}
-
-function paRenderChordBank() {
-  const bankEl = document.getElementById('pa-chord-bank');
-  if (!bankEl) return;
-  bankEl.innerHTML = '<span class="pa-chord-bank-label">Chord Bank</span>';
-
-  const chords = paChordBankValues();
-  if (!chords.length) {
-    const empty = document.createElement('span');
-    empty.className = 'pa-bank-chip pa-bank-chip-empty';
-    empty.textContent = 'Add a chord below, then reuse it here';
-    bankEl.appendChild(empty);
-    return;
-  }
-
-  chords.forEach(baseChord => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pa-bank-chip';
-    btn.textContent = paToDisplayChord(baseChord);
-    btn.title = 'Insert at the current indicator beat';
-    btn.addEventListener('click', () => paInsertChordFromBank(baseChord));
-    bankEl.appendChild(btn);
-  });
 }
 
 const _NOTE_TO_PC = {
@@ -1581,8 +1443,6 @@ function paTransposeBy(delta) {
   paTransposeSemitones += delta;
   paRenderTransposeLabel();
   paRenderKeyBadge();
-  paRenderChordBank();
-  initPlayAlongGrid();
   paRenderBeatTimeline();
   paCurrentIdx = -1;
   paUpdate();
@@ -1621,90 +1481,13 @@ function initPlayAlong() {
   paTransposeSemitones = 0;
   paRenderKeyBadge();
   paRenderTransposeLabel();
-  paRenderChordBank();
   document.getElementById('pa-bpm-badge').textContent = `BPM: ${bpmVal}`;
 
-  // Build lines (groups of PA_CHORDS_PER_LINE)
+  // Build lines (groups of PA_CHORDS_PER_LINE) — used by Prev/Next Line transport
   paLines = [];
   for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
     paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
   }
-
-  // Render chord line grid
-  const linesEl = document.getElementById('pa-lines');
-  linesEl.innerHTML = '';
-  paLines.forEach((line, li) => {
-    const row = document.createElement('div');
-    row.className = 'pa-line';
-    row.dataset.line = li;
-
-    // Line number
-    const numEl = document.createElement('div');
-    numEl.className = 'pa-line-num';
-    numEl.textContent = li + 1;
-    numEl.title = 'Click to play this line';
-    numEl.style.cursor = 'pointer';
-    numEl.onclick = () => paJumpToLine(li);
-    row.appendChild(numEl);
-
-    // Chord blocks
-    for (let si = line.startIdx; si <= line.endIdx; si++) {
-      const seg = segs[si];
-      const block = document.createElement('div');
-      block.className = 'pa-block';
-      block.dataset.idx = si;
-      block.onclick = () => paJumpTo(si);
-
-      const chord = _segmentChordForDisplay(seg);
-
-      // Editable chord name
-      const nameEl = document.createElement('div');
-      nameEl.className = 'pa-block-chord';
-      nameEl.contentEditable = 'true';
-      nameEl.textContent = paToDisplayChord(chord);
-      nameEl.addEventListener('blur', function() {
-        const displayChord = this.textContent.trim();
-        const newChord = paToBaseChord(displayChord);
-        if (currentSegments[si]) {
-          currentSegments[si].sheetChord = newChord || '';
-          currentSegments[si].chord = newChord || '';
-        }
-      });
-      nameEl.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
-      });
-      nameEl.addEventListener('click', function(e) { e.stopPropagation(); });
-      block.appendChild(nameEl);
-
-      // Time label
-      const timeEl = document.createElement('div');
-      timeEl.className = 'pa-block-time';
-      timeEl.textContent = formatTime(seg.start);
-      block.appendChild(timeEl);
-
-      // Word label (lyric mode)
-      if (currentAlignMode === 'lyric' && seg.word) {
-        const wordEl = document.createElement('div');
-        wordEl.className = 'pa-block-word';
-        wordEl.textContent = seg.word;
-        block.appendChild(wordEl);
-      }
-
-      row.appendChild(block);
-    }
-
-    // Pad empty slots if line has fewer than PA_CHORDS_PER_LINE
-    const count = line.endIdx - line.startIdx + 1;
-    for (let p = count; p < PA_CHORDS_PER_LINE; p++) {
-      const pad = document.createElement('div');
-      pad.className = 'pa-block';
-      pad.style.opacity = '0.15';
-      pad.style.cursor = 'default';
-      row.appendChild(pad);
-    }
-
-    linesEl.appendChild(row);
-  });
 
   // Build progress markers
   const markers = document.getElementById('pa-progress-markers');
@@ -1723,8 +1506,6 @@ function initPlayAlong() {
   // Reset state
   paCurrentIdx = -1;
   paCurrentLineIdx = -1;
-  paLoopLine = false;
-  document.getElementById('pa-loop-line-btn').classList.remove('active');
   paUpdate();
 }
 
@@ -1743,21 +1524,10 @@ function paUpdate() {
   }
   if (idx === -1 && t >= segs[segs.length - 1].start) idx = segs.length - 1;
 
-  // Find which line the active segment is in
+  // Find which line the active segment is in (used by Prev/Next Line transport)
   let lineIdx = -1;
   if (idx >= 0) {
     lineIdx = Math.floor(idx / PA_CHORDS_PER_LINE);
-  }
-
-  // Loop-line: if we've crossed into the next line, jump back
-  const _isPlaying = (ytPlayer && _currentIngestVideoId) ? _isYTPlaying() : (player && !player.paused);
-  if (paLoopLine && paCurrentLineIdx >= 0 && lineIdx !== paCurrentLineIdx && _isPlaying) {
-    const loopLine = paLines[paCurrentLineIdx];
-    if (loopLine) {
-      paSeekTo(segs[loopLine.startIdx].start);
-      paAnimFrame = requestAnimationFrame(paUpdate);
-      return;
-    }
   }
 
   // ── Update 3-card display ──
@@ -1801,30 +1571,9 @@ function paUpdate() {
     paCurrentIdx = -1;
   }
 
-  // ── Update line-by-line grid ──
-  const lineEls = document.querySelectorAll('#pa-lines .pa-line');
-  lineEls.forEach((el, li) => {
-    el.classList.remove('pa-line-active', 'pa-line-past');
-    if (li === lineIdx) el.classList.add('pa-line-active');
-    else if (li < lineIdx) el.classList.add('pa-line-past');
-  });
-
-  // Update blocks
-  const blocks = document.querySelectorAll('#pa-lines .pa-block[data-idx]');
-  blocks.forEach(block => {
-    const si = parseInt(block.dataset.idx);
-    block.classList.remove('pa-block-active', 'pa-block-past');
-    if (si === idx) block.classList.add('pa-block-active');
-    else if (si < idx) block.classList.add('pa-block-past');
-  });
-
-  // Auto-scroll to active line
+  // Track active line index for Prev/Next Line transport
   if (lineIdx >= 0 && lineIdx !== paCurrentLineIdx) {
     paCurrentLineIdx = lineIdx;
-    const activeLine = lineEls[lineIdx];
-    if (activeLine) {
-      activeLine.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
   }
 
   // ── Progress bar ──
@@ -1964,18 +1713,6 @@ function paJumpToLine(lineIdx) {
 function paSkipLine(dir) {
   const newLine = Math.max(0, Math.min(paLines.length - 1, paCurrentLineIdx + dir));
   paJumpToLine(newLine);
-}
-
-function paToggleChordLines(e) {
-  // Don't collapse when clicking the Loop Line button
-  if (e.target.tagName === 'BUTTON') return;
-  document.querySelector('.pa-lines-wrap').classList.toggle('collapsed');
-}
-
-function paToggleLoopLine() {
-  paLoopLine = !paLoopLine;
-  const btn = document.getElementById('pa-loop-line-btn');
-  btn.classList.toggle('active', paLoopLine);
 }
 
 function seekProgress(e) {
@@ -2140,7 +1877,6 @@ function paRenderBeatTimeline() {
         paBeatChords[bi] = '';
         paBeatsToSegments();
         paUpdateBeatLabel(bi, div);
-        initPlayAlongGrid();
         // Remove the X button itself
         del.remove();
       });
@@ -2212,8 +1948,6 @@ function paEditBeat(bi, beatDiv) {
     paBeatsToSegments();
     // Update this beat's label in-place (no full re-render)
     paUpdateBeatLabel(bi, beatDiv);
-    // Also refresh the chord line grid
-    initPlayAlongGrid();
   };
 
   input.addEventListener('blur', commit);
@@ -2285,311 +2019,6 @@ function paBeatsToSegments() {
 
   currentSegments = newSegs;
   paRedetectKeyFromSegments();
-}
-
-  const segments = currentSegments.map(s => ({
-    start: s.start,
-    end: s.end,
-    chord: s.sheetChord || s.chord || 'N',
-  }));
-// Keep full 4x4 block structure so spacing is preserved on paste.
-let _copiedSection = []; // [{ chord: string, nBeats: number|null }, ...] length 16
-let _copiedBeatPattern = []; // beat-level markers: chord on onset beat, '' on continuation beats
-
-function _serializeCopiedSection(section) {
-  // 4 lines × 4 blocks, tab-separated for robust clipboard roundtrip.
-  const lines = [];
-  for (let li = 0; li < 4; li++) {
-    const row = [];
-    for (let bi = 0; bi < PA_CHORDS_PER_LINE; bi++) {
-      const idx = li * PA_CHORDS_PER_LINE + bi;
-      const item = section[idx] || { chord: '', nBeats: null };
-      const beats = Number.isFinite(item.nBeats) ? item.nBeats : '';
-      row.push(`${item.chord || ''}::${beats}`);
-    }
-    lines.push(row.join('\t'));
-  }
-  return lines.join('\n');
-}
-
-function _deserializeCopiedSection(text) {
-  const out = [];
-  if (!text || typeof text !== 'string') return out;
-  const lines = text.replace(/\r/g, '').split('\n').slice(0, 4);
-  for (let li = 0; li < 4; li++) {
-    const cols = (lines[li] || '').split('\t').slice(0, PA_CHORDS_PER_LINE);
-    for (let bi = 0; bi < PA_CHORDS_PER_LINE; bi++) {
-      const raw = cols[bi] || '';
-      const sep = raw.lastIndexOf('::');
-      if (sep >= 0) {
-        const chord = raw.slice(0, sep);
-        const beatsStr = raw.slice(sep + 2);
-        const beats = Number.isFinite(Number(beatsStr)) && beatsStr !== '' ? Number(beatsStr) : null;
-        out.push({ chord, nBeats: beats });
-      } else {
-        out.push({ chord: raw, nBeats: null });
-      }
-    }
-  }
-  return out;
-}
-
-async function paCopySection(startLineIdx) {
-  // Copy 4 lines (16 blocks) anchored at active/playhead block when available.
-  let startSeg = startLineIdx * PA_CHORDS_PER_LINE;
-
-  // 1) Resolve directly from the timeline indicator/playhead time.
-  const player = document.getElementById('audio-player');
-  let anchorTime = (ytPlayer && _currentIngestVideoId) ? _getYTCurrentTime() : (player ? player.currentTime : 0);
-  if (Number.isFinite(paCurrentBeatIdx) && paCurrentBeatIdx >= 0 && paCurrentBeatIdx < paBeatTimes.length) {
-    anchorTime = paBeatTimes[paCurrentBeatIdx];
-  }
-
-  let byTime = -1;
-  for (let i = 0; i < currentSegments.length; i++) {
-    if (anchorTime >= currentSegments[i].start && anchorTime < currentSegments[i].end) {
-      byTime = i;
-      break;
-    }
-  }
-  if (byTime === -1 && currentSegments.length && anchorTime >= currentSegments[currentSegments.length - 1].start) {
-    byTime = currentSegments.length - 1;
-  }
-
-  if (byTime >= 0) {
-    startSeg = byTime;
-  } else if (Number.isFinite(paCurrentIdx) && paCurrentIdx >= 0) {
-    // 2) Fallback: active segment tracked by update loop.
-    startSeg = paCurrentIdx;
-  } else {
-    // 3) Fallback: active block in line grid.
-    const activeBlock = document.querySelector('#pa-lines .pa-block.pa-block-active[data-idx]');
-    if (activeBlock) {
-      const idx = parseInt(activeBlock.dataset.idx, 10);
-      if (Number.isFinite(idx)) startSeg = idx;
-    }
-  }
-
-  startSeg = Math.max(0, Math.min(startSeg, Math.max(0, currentSegments.length - 1)));
-  _copiedSection = [];
-  _copiedBeatPattern = [];
-  for (let i = 0; i < 16; i++) {
-    const seg = currentSegments[startSeg + i];
-    const chord = seg ? (seg.sheetChord || seg.chord || '') : '';
-    const nBeats = seg && Number.isFinite(seg.nBeats) && seg.nBeats > 0 ? seg.nBeats : 1;
-    _copiedSection.push({ chord, nBeats });
-
-    // Build beat-level spacing pattern so 5-beat (or any) spacing survives paste.
-    if (chord) {
-      _copiedBeatPattern.push(chord);
-      for (let b = 1; b < nBeats; b++) _copiedBeatPattern.push('');
-    } else {
-      for (let b = 0; b < nBeats; b++) _copiedBeatPattern.push('');
-    }
-  }
-
-  // Also write to system clipboard so paste works across refreshes/tabs.
-  const payload = _serializeCopiedSection(_copiedSection);
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    try {
-      await navigator.clipboard.writeText(payload);
-    } catch (_) {
-      // Ignore clipboard permission errors; in-memory copy still works.
-    }
-  }
-
-  const btn = document.querySelector(`[data-copy-line="${startLineIdx}"]`);
-  if (btn) {
-    btn.textContent = '✓ Copied';
-    setTimeout(() => { btn.textContent = '📋 Copy'; }, 1200);
-  }
-}
-
-async function paPasteSection(startLineIdx) {
-  let section = _copiedSection;
-
-  // Prefer clipboard payload if available (useful across pages/reloads).
-  if (navigator.clipboard && navigator.clipboard.readText) {
-    try {
-      const clip = await navigator.clipboard.readText();
-      const parsed = _deserializeCopiedSection(clip);
-      if (parsed.length === 16) section = parsed;
-    } catch (_) {
-      // Fall back to in-memory section.
-    }
-  }
-
-  if (!section || !section.length) return;
-
-  const startSeg = startLineIdx * PA_CHORDS_PER_LINE;
-
-  // Prefer beat-level paste to preserve exact spacing between chord onsets.
-  if (paBeatTimes && paBeatTimes.length && _copiedBeatPattern && _copiedBeatPattern.length) {
-    const startTime = currentSegments[startSeg]?.start;
-    if (Number.isFinite(startTime)) {
-      let startBeatIdx = 0;
-      for (let i = 0; i < paBeatTimes.length; i++) {
-        if (paBeatTimes[i] >= startTime - 1e-6) {
-          startBeatIdx = i;
-          break;
-        }
-      }
-
-      for (let j = 0; j < _copiedBeatPattern.length; j++) {
-        const bi = startBeatIdx + j;
-        if (bi >= paBeatChords.length) break;
-        paBeatChords[bi] = _copiedBeatPattern[j];
-      }
-
-      paBeatsToSegments();
-      initPlayAlongGrid();
-      paBuildBeatTimeline();
-      return;
-    }
-  }
-
-  for (let i = 0; i < section.length && (startSeg + i) < currentSegments.length; i++) {
-    const target = currentSegments[startSeg + i];
-    const item = section[i] || { chord: '', nBeats: null };
-    target.sheetChord = item.chord;
-    target.chord = item.chord;
-    if (Number.isFinite(item.nBeats) && item.nBeats > 0) {
-      target.nBeats = item.nBeats;
-    }
-  }
-
-  initPlayAlongGrid();
-  paBuildBeatTimeline();
-}
-
-function paRepeatLine(lineIdx) {
-  const line = paLines[lineIdx];
-  if (!line) return;
-
-  const repeatsRaw = window.prompt('Repeat this 4-column pattern how many additional times?', '1');
-  if (repeatsRaw === null) return;
-
-  const repeats = Math.max(1, parseInt(repeatsRaw, 10) || 0);
-  if (!repeats) return;
-
-  if (!paBeatTimes.length) {
-    paBuildBeatTimeline();
-  }
-
-  const lineStartTime = currentSegments[line.startIdx]?.start;
-  const nextLine = paLines[lineIdx + 1];
-  const lineEndTime = nextLine
-    ? currentSegments[nextLine.startIdx]?.start
-    : (currentSegments[currentSegments.length - 1]?.end || lineStartTime);
-
-  if (!Number.isFinite(lineStartTime) || !Number.isFinite(lineEndTime) || lineEndTime <= lineStartTime) {
-    return;
-  }
-
-  let startBeatIdx = paBeatTimes.findIndex(t => t >= lineStartTime - 1e-6);
-  if (startBeatIdx < 0) startBeatIdx = 0;
-
-  let endBeatIdx = paBeatTimes.findIndex(t => t >= lineEndTime - 1e-6);
-  if (endBeatIdx < 0) endBeatIdx = paBeatTimes.length;
-  if (endBeatIdx <= startBeatIdx) endBeatIdx = Math.min(paBeatTimes.length, startBeatIdx + 1);
-
-  const sourcePattern = paBeatChords.slice(startBeatIdx, endBeatIdx);
-  const patternLen = sourcePattern.length;
-  if (!patternLen) return;
-
-  for (let rep = 1; rep <= repeats; rep++) {
-    const targetStartBeat = startBeatIdx + rep * patternLen;
-    if (targetStartBeat >= paBeatChords.length) break;
-    for (let j = 0; j < patternLen && (targetStartBeat + j) < paBeatChords.length; j++) {
-      paBeatChords[targetStartBeat + j] = sourcePattern[j];
-    }
-  }
-
-  paBeatsToSegments();
-  initPlayAlongGrid();
-}
-
-function initPlayAlongGrid() {
-  // Re-render just the chord line grid (not the full initPlayAlong)
-  const segs = currentSegments;
-  paRenderChordBank();
-  paLines = [];
-  for (let i = 0; i < segs.length; i += PA_CHORDS_PER_LINE) {
-    paLines.push({ startIdx: i, endIdx: Math.min(i + PA_CHORDS_PER_LINE - 1, segs.length - 1) });
-  }
-  const linesEl = document.getElementById('pa-lines');
-  linesEl.innerHTML = '';
-  paLines.forEach((line, li) => {
-    const row = document.createElement('div');
-    row.className = 'pa-line';
-    row.dataset.line = li;
-    const numEl = document.createElement('div');
-    numEl.className = 'pa-line-num';
-    numEl.textContent = li + 1;
-    numEl.style.cursor = 'pointer';
-    numEl.onclick = () => paJumpToLine(li);
-    row.appendChild(numEl);
-    for (let si = line.startIdx; si <= line.endIdx; si++) {
-      const seg = segs[si];
-      const block = document.createElement('div');
-      block.className = 'pa-block';
-      block.dataset.idx = si;
-      block.onclick = () => paJumpTo(si);
-      const nameEl = document.createElement('div');
-      nameEl.className = 'pa-block-chord';
-      nameEl.contentEditable = 'true';
-      nameEl.textContent = paToDisplayChord((seg.sheetChord || seg.chord || '').trim() || '');
-      nameEl.setAttribute('placeholder', '–');
-      if (!nameEl.textContent) nameEl.style.opacity = '0.3';
-      nameEl.addEventListener('blur', function() {
-        const ncDisplay = this.textContent.trim();
-        const nc = paToBaseChord(ncDisplay);
-        if (currentSegments[si]) {
-          currentSegments[si].sheetChord = nc;
-          currentSegments[si].chord = nc;
-          this.style.opacity = ncDisplay ? '1' : '0.3';
-          // Rebuild beat chords from updated segments
-          paBuildBeatTimeline();
-        }
-      });
-      nameEl.addEventListener('keydown', function(ev) {
-        if (ev.key === 'Enter') { ev.preventDefault(); this.blur(); }
-      });
-      nameEl.addEventListener('click', function(ev) { ev.stopPropagation(); });
-      block.appendChild(nameEl);
-      const timeEl = document.createElement('div');
-      timeEl.className = 'pa-block-time';
-      timeEl.textContent = formatTime(seg.start);
-      block.appendChild(timeEl);
-      if (currentAlignMode === 'lyric' && seg.word) {
-        const wordEl = document.createElement('div');
-        wordEl.className = 'pa-block-word';
-        wordEl.textContent = seg.word;
-        block.appendChild(wordEl);
-      }
-      row.appendChild(block);
-    }
-    const count = line.endIdx - line.startIdx + 1;
-    for (let p = count; p < PA_CHORDS_PER_LINE; p++) {
-      const pad = document.createElement('div');
-      pad.className = 'pa-block';
-      pad.style.opacity = '0.15';
-      pad.style.cursor = 'default';
-      row.appendChild(pad);
-    }
-    // Copy/Paste buttons for this line
-    const actionsEl = document.createElement('div');
-    actionsEl.className = 'pa-line-actions';
-    actionsEl.style.cssText = 'display:flex;flex-direction:column;gap:2px;margin-left:4px;font-size:0.7em;';
-    const repeatBtn = document.createElement('button');
-    repeatBtn.textContent = '↻ Repeat';
-    repeatBtn.title = 'Repeat this line using the actual chord spacing pattern';
-    repeatBtn.style.cssText = 'cursor:pointer;background:#333;color:#ccc;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:inherit;white-space:nowrap;';
-    repeatBtn.onclick = (e) => { e.stopPropagation(); paRepeatLine(li); };
-    actionsEl.appendChild(repeatBtn);
-    row.appendChild(actionsEl);
-    linesEl.appendChild(row);
-  });
 }
 
 function paZoomTimeline(dir) {
@@ -2782,7 +2211,6 @@ async function paLoadVersion(versionId) {
 
     // Rebuild beat timeline from segments
     paBuildBeatTimeline();
-    initPlayAlongGrid();
 
     // Keep audio playable when history changes only chord metadata.
     const player = document.getElementById('audio-player');
