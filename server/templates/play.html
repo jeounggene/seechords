@@ -1058,6 +1058,13 @@
   });
 })();
 
+function _sourceLabel(src) {
+  if (src === 'verified') return 'Made by Jin';
+  if (src && src.indexOf('btc-') === 0) return 'Made by SeeChords ' + src.replace('btc-', 'Model ');
+  if (src === 'user-uploaded') return 'Made by SeeChords Model v1';
+  return 'Made by SeeChords';
+}
+
 let currentVideoId  = null;
 let chords          = [];
 let beatTimes       = [];
@@ -1989,7 +1996,7 @@ function initPlayer(data) {
   var vsel = document.getElementById('versionSelect');
   if (vsel && currentVideoId) {
     var currentSrc = data.source || 'model';
-    var currentLabel = (currentSrc === 'verified') ? 'Made by Jin' : 'Made by SeeChords';
+    var currentLabel = _sourceLabel(currentSrc);
     // Show current as default immediately
     vsel.innerHTML = '<option value="">' + currentLabel + '</option>';
     vsel.style.display = '';
@@ -2000,7 +2007,7 @@ function initPlayer(data) {
       versions.forEach(function(v) {
         var opt = document.createElement('option');
         opt.value = v.versionId;
-        var label = v.source === 'verified' ? 'Made by Jin' : 'Made by SeeChords';
+        var label = _sourceLabel(v.source);
         opt.textContent = label + ' · ' + (v.key || '?') + ' · ' + v.segmentCount + ' segs';
         if (v.versionId === data.versionId) opt.selected = true;
         vsel.appendChild(opt);

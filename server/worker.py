@@ -226,7 +226,7 @@ def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, 'user-uploaded', ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, 'btc-v2', ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
           int(time.time())))
@@ -571,7 +571,7 @@ def main():
             bpm=round(bpm_val, 1),
             key=key_val,
             beat_times=beat_times,
-            source='user-uploaded',
+            source='btc-v2',
         )
         print(f'[Worker] Job complete! versionId={version_id}', flush=True)
 

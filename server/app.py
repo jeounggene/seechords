@@ -46,6 +46,9 @@ CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPT
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
 INGEST_PASSWORD = os.environ.get('INGEST_PASSWORD', '')
 
+# Current analysis model version — used as source tag for chord_versions
+CURRENT_MODEL_SOURCE = 'btc-v2'
+
 # In-memory cache for resolved YouTube stream URLs (TTL 5h, evicted per-request)
 _yt_stream_cache = {}   # video_id -> {'url': str, 'content_type': str, 'expires': float}
 _yt_stream_lock  = threading.Lock()
@@ -345,10 +348,10 @@ def _cache_put(video_id, title, key, bpm, chords_data, beat_times):
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, 'user-uploaded', ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
-          int(time.time())))
+          CURRENT_MODEL_SOURCE, int(time.time())))
     con.commit()
     version_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
     con.close()
@@ -647,7 +650,7 @@ def _process_job_local(job_id: str, source_path: str, video_id: str, title: str)
             bpm=round(bpm_val, 1),
             key=key_val,
             beat_times=beat_times,
-            source='user-uploaded',
+            source=CURRENT_MODEL_SOURCE,
         )
     except Exception as exc:
         import traceback
@@ -688,6 +691,11 @@ def analyze():
 
     if _has_verified_version(video_id):
         return jsonify({'error': 'This video has verified chords; re-analysis is disabled.'}), 400
+
+    # Block re-analysis if already analyzed with the current model
+    existing = _cache_get(video_id)
+    if existing and existing.get('source') == CURRENT_MODEL_SOURCE:
+        return jsonify({'error': f'Already analyzed with the current model ({CURRENT_MODEL_SOURCE}). No re-analysis needed.'}), 400
 
     file_obj = request.files.get('file')
     if not file_obj or not file_obj.filename:

@@ -10,6 +10,13 @@
 'use strict';
 
 // ─── State ────────────────────────────────────────────────
+function _sourceLabel(src) {
+  if (src === 'verified') return 'Made by Jin';
+  if (src && src.startsWith('btc-')) return 'Made by SeeChords ' + src.replace('btc-', 'Model ');
+  if (src === 'user-uploaded') return 'Made by SeeChords Model v1';
+  return 'Made by SeeChords';
+}
+
 let currentVideoId  = null;
 let chordData       = null;  // full API response
 let chords          = [];    // [{chord, start, end}, …]
@@ -952,12 +959,14 @@ function showChords() {
   if (body) body.style.display = '';
 }
 
+const CURRENT_MODEL_SOURCE = 'btc-v2';
+
 function updateReanalyzeButtonVisibility() {
   const btn = document.getElementById('scReuploadBtn');
   if (!btn) return;
-  const hide = currentChordSource === 'verified';
+  const hide = currentChordSource === 'verified' || currentChordSource === CURRENT_MODEL_SOURCE;
   btn.style.display = hide ? 'none' : '';
-  btn.title = hide ? 'Verified — re-analysis disabled' : 'Re-analyze chords';
+  btn.title = hide ? 'Already using the latest model — re-analysis disabled' : 'Re-analyze chords';
 }
 
 // ─── Render Timeline & Cards ──────────────────────────────
@@ -1515,7 +1524,7 @@ function loadChordData(data) {
   // Attribution badge
   const scSourceBadge = document.getElementById('scSourceBadge');
   if (scSourceBadge) {
-    const sourceLabel = (currentChordSource === 'verified') ? 'Made by Jin' : 'Made by SeeChords';
+    const sourceLabel = _sourceLabel(currentChordSource);
     scSourceBadge.textContent = sourceLabel;
     scSourceBadge.style.display = '';
   }
@@ -1559,7 +1568,7 @@ function fetchVersionsList(videoId, activeVersionId) {
           ? new Date(v.analyzedAt * 1000) : new Date(v.analyzedAt);
         if (!isNaN(d)) date = d.toISOString().slice(0, 16).replace('T', ' ');
       }
-      const label = v.source === 'verified' ? 'Made by Jin' : 'Made by SeeChords';
+      const label = _sourceLabel(v.source);
       opt.textContent = `${label} · ${v.key || '?'} · ${v.segmentCount} segs · ${date}`;
       if (v.versionId === activeVersionId || v.isActive) opt.selected = true;
       sel.appendChild(opt);
