@@ -1068,6 +1068,9 @@ function _sourceLabel(src) {
 let currentVideoId  = null;
 let chords          = [];
 let beatTimes       = [];
+let downbeats       = [];
+let barPhase        = 0;          // beat index of first bar start (ChordMini-style regular grid)
+let timeSigNum      = 4;          // beats per bar (3 or 4 typically)
 let beatChords      = [];
 let baseKey         = '';
 let bpm             = 120;
@@ -1417,10 +1420,10 @@ function formatChordHTML(raw) {
 function buildChordSVG(chordName) {
   const key  = chordName.replace('♯','#').replace('♭','b');
   let data = CHORD_DIAGRAMS[key];
-  // Enharmonic fallback: map sharp names to their flat equivalents
+  // Enharmonic fallback: sharp↔flat (covers Db→C#, Gb→F# and D#→Eb etc.)
   if (!data) {
-    const enharmonic = { 'D#':'Eb', 'G#':'Ab', 'A#':'Bb' };
-    const re = /^([A-G]#)/;
+    const enharmonic = { 'D#':'Eb', 'G#':'Ab', 'A#':'Bb', 'Db':'C#', 'Gb':'F#' };
+    const re = /^([A-G][#b])/;
     const m = key.match(re);
     if (m && enharmonic[m[1]]) {
       data = CHORD_DIAGRAMS[enharmonic[m[1]] + key.slice(m[1].length)];
@@ -1481,6 +1484,61 @@ function buildChordSVG(chordName) {
 }
 
 // ── Beat-chord building and lookup functions ─────────────────
+
+// ChordMini-style regular grid: detect time signature from downbeat gaps,
+// then synthesize evenly-spaced bar lines at a fixed stride. Robust to
+// noisy/missing/duplicate downbeats from the tracker.
+function computeDownbeatInfo() {
+  barPhase = 0;
+  timeSigNum = 4;
+  if (!beatTimes.length || !downbeats.length) return;
+
+  // Snap each downbeat timestamp to its nearest beat index
+  const snapped = [];
+  for (const dt of downbeats) {
+    let best = 0, bestDiff = Infinity;
+    for (let i = 0; i < beatTimes.length; i++) {
+      const diff = Math.abs(beatTimes[i] - dt);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+      else if (beatTimes[i] > dt) break;
+    }
+    snapped.push(best);
+  }
+  // Deduplicate + sort
+  const uniq = Array.from(new Set(snapped)).sort((a, b) => a - b);
+  if (uniq.length < 2) return;
+
+  // Mode gap between consecutive snapped downbeats → time signature
+  const gaps = [];
+  for (let i = 1; i < uniq.length; i++) gaps.push(uniq[i] - uniq[i - 1]);
+  const counts = new Map();
+  for (const g of gaps) counts.set(g, (counts.get(g) || 0) + 1);
+  let mode = 4, modeCount = 0;
+  for (const [g, c] of counts) {
+    if (c > modeCount || (c === modeCount && g < mode)) { mode = g; modeCount = c; }
+  }
+  // Map beat-subdivision modes onto displayed time signature
+  if (mode === 2 || mode === 3 || mode === 4) timeSigNum = mode;
+  else if (mode === 6) timeSigNum = 3;   // 6/8 or 3/4 double-time
+  else if (mode === 8) timeSigNum = 4;   // 4/4 double-time
+  else timeSigNum = 4;
+
+  // Choose phase (0..timeSigNum-1) that maximizes snapped downbeats on grid
+  let bestPhase = 0, bestHits = -1;
+  for (let p = 0; p < timeSigNum; p++) {
+    let hits = 0;
+    for (const bi of uniq) if (((bi - p) % timeSigNum + timeSigNum) % timeSigNum === 0) hits++;
+    if (hits > bestHits) { bestHits = hits; bestPhase = p; }
+  }
+  barPhase = bestPhase;
+}
+
+function isBarStart(bi) {
+  // Regular evenly-spaced grid: every timeSigNum beats starting from barPhase
+  if (bi < barPhase) return false;
+  return ((bi - barPhase) % timeSigNum) === 0;
+}
+
 function buildBeatChords() {
   if (!beatTimes.length || !chords.length) return [];
   const result = [];
@@ -1976,8 +2034,10 @@ function initPlayer(data) {
   transposeSteps = 0;
   chords    = data.chords    || [];
   beatTimes = data.beat_times || [];
+  downbeats = data.downbeats || [];
   baseKey   = data.key       || '';
   bpm       = data.bpm       || 120;
+  computeDownbeatInfo();
   beatChords = buildBeatChords();
 
   // Stop any previous tracking
@@ -2229,7 +2289,7 @@ function renderTimeline() {
   beatTimes.forEach((_, bi) => {
     const div = document.createElement('div');
     div.className = 'tl-beat';
-    if (bi % 4 === 0) div.classList.add('measure-start');
+    if (isBarStart(bi)) div.classList.add('measure-start');
     div.dataset.bi = bi;
 
     const gi = beatToGroup[bi];
