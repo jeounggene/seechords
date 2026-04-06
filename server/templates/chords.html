@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="SeeChords — beat-synced chord viewer">
+  <title>SeeChords Chords</title>
+  <style>
+    :root {
+      --bg:           #080812;
+      --bg-card:      #12122a;
+      --bg-input:     #1a1a36;
+      --border:       #2a2a50;
+      --accent:       #6c47ff;
+      --accent-hover: #8264ff;
+      --gold:         #ffd700;
+      --text:         #f0f0f8;
+      --muted:        #8888aa;
+      --radius:       12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    .header {
+      height: 68px;
+      padding: 0 16px;
+      background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.43em;
+      font-size: 1.4rem;
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .brand-logo {
+      width: 1.5556em;
+      height: 1.5556em;
+      border-radius: 0.214em;
+      object-fit: contain;
+    }
+    .brand-name { font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+    .song-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .badge {
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 99px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-key { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
+    .badge-bpm { border-color: rgba(108,71,255,.25); color: rgba(180,123,255,.75); }
+    .transpose-ctrl {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 2px 6px;
+      flex-shrink: 0;
+    }
+    .ctrl-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 0.75rem;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 4px;
+      transition: color .2s, background .2s;
+      touch-action: manipulation;
+    }
+    .ctrl-btn:hover { color: var(--text); background: var(--border); }
+    .ctrl-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      min-width: 58px;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .yt-link {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 5px 10px;
+      text-decoration: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: color .2s, border-color .2s;
+    }
+    .yt-link:hover { color: var(--text); border-color: var(--accent); text-decoration: none; }
+
+    /* ── Viewer area ── */
+    .viewer {
+      height: calc(100dvh - 68px);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Loading / error states ── */
+    .state-overlay {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px 24px;
+    }
+    .state-card {
+      max-width: 400px;
+    }
+    .state-icon { font-size: 2.5rem; margin-bottom: 16px; }
+    .state-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; }
+    .state-msg { font-size: 0.9rem; color: var(--muted); line-height: 1.5; margin-bottom: 20px; }
+    .state-btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .15s;
+    }
+    .state-btn:hover { background: var(--accent-hover); text-decoration: none; color: #fff; }
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Timeline ── */
+    .timeline-wrap {
+      flex-shrink: 0;
+      height: 68px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-bottom: 1px solid rgba(255,255,255,.07);
+      scrollbar-width: none;
+      background: #0a0a1a;
+    }
+    .timeline-wrap::-webkit-scrollbar { display: none; }
+    .tl-row {
+      display: flex;
+      align-items: stretch;
+      height: 100%;
+    }
+    .tl-pad { flex-shrink: 0; width: 68px; height: 100%; }
+    .tl-beat {
+      flex-shrink: 0;
+      position: relative;
+      width: 68px;
+      height: 100%;
+      border-right: 1px solid rgba(255,255,255,.09);
+      display: flex;
+      align-items: flex-end;
+      overflow: visible;
+      cursor: pointer;
+      background: transparent;
+      transition: background .15s;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .tl-beat:hover, .tl-beat:active { background: rgba(255,255,255,.06); }
+    .tl-beat.active { background: rgba(255,255,255,.18); }
+    .tl-beat.measure-start { border-left: 2px solid rgba(255,255,255,.32); }
+    .tl-beat.empty { cursor: default; pointer-events: none; border-right-color: rgba(255,255,255,.05); }
+    .beat-name {
+      position: absolute;
+      bottom: 4px;
+      left: 5px;
+      font-weight: 700;
+      font-size: 1.1rem;
+      line-height: 1;
+      color: rgba(255,255,255,.75);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .tl-beat.active .beat-name { color: #fff; }
+    .beat-name.beat-n { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+    .sc-chord-suffix { font-size: 0.9em; font-weight: 400; opacity: .8; }
+    .sc-flat { font-size: 0.9em; }
+
+    /* ── Chord cards ── */
+    .chord-trio {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+    .chord-card {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 8px;
+      gap: 8px;
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .chord-card:last-child { border-right: none; }
+    .chord-card.card-prev, .chord-card.card-next {
+      opacity: 0.4;
+      flex: 0.6;
+    }
+    .chord-card.card-active { background: rgba(108,71,255,.06); }
+    .chord-name {
+      font-size: clamp(1.8rem, 6vw, 3rem);
+      font-weight: 800;
+      line-height: 1;
+      text-align: center;
+      color: var(--text);
+    }
+    .chord-card.card-active .chord-name { color: #fff; }
+    .chord-diagram { color: var(--text); flex-shrink: 0; }
+    .chord-diagram svg { display: block; }
+
+    /* ── Mobile tweaks ── */
+    @media (max-width: 480px) {
+      .header { padding: 0 10px; gap: 6px; }
+      .badge { display: none; }
+      .song-title { font-size: 0.82rem; }
+      .chord-card.card-prev, .chord-card.card-next { flex: 0.5; }
+      .chord-diagram svg { width: 80px; height: auto; }
+    }
+    @media (max-height: 600px) and (orientation: landscape) {
+      .chord-trio { min-height: 80px; }
+      .chord-diagram { display: none; }
+    }
+    @media (pointer: coarse) {
+      .tl-beat { width: 76px; }
+      .tl-pad  { width: 76px; }
+      .chord-name { font-size: clamp(2rem, 7vw, 3.5rem); }
+    }
+  </style>
+</head>
+<body>
+
+<header class="header" id="pageHeader">
+  <a href="/" class="brand">
+    <img class="brand-logo" src="{{ url_for('static', filename='icon128.png') }}" alt="SeeChords" width="128" height="128">
+    <span class="brand-name">SeeChords</span>
+  </a>
+  <span class="song-title" id="songTitle"></span>
+  <span class="badge badge-key" id="keyBadge" style="display:none"></span>
+  <span class="badge badge-bpm" id="bpmBadge" style="display:none"></span>
+  <div class="transpose-ctrl" id="transpCtrl" style="display:none">
+    <button class="ctrl-btn" id="transpDown" aria-label="Transpose down" type="button">▼</button>
+    <span class="ctrl-label" id="transpLabel">Original</span>
+    <button class="ctrl-btn" id="transpUp" aria-label="Transpose up" type="button">▲</button>
+  </div>
+  <a class="yt-link" id="ytLink" href="https://www.youtube.com/watch?v={{ video_id }}" target="_blank" rel="noopener" style="display:none">
+    ▶ YouTube
+  </a>
+</header>
+
+<div class="viewer" id="viewer">
+
+  <!-- Loading -->
+  <div class="state-overlay" id="stateLoading">
+    <div class="state-card">
+      <div class="spinner"></div>
+      <div class="state-title">Loading chords…</div>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="state-overlay" id="stateError" style="display:none">
+    <div class="state-card">
+      <div class="state-icon">🎸</div>
+      <div class="state-title" id="errTitle">Chords not found</div>
+      <div class="state-msg" id="errMsg">This song hasn't been analyzed yet. Analyze it with the extension or the web player.</div>
+      <a class="state-btn" href="/play">Analyze on Web Player</a>
+    </div>
+  </div>
+
+  <!-- Chord viewer (hidden until loaded) -->
+  <div class="timeline-wrap" id="timelineWrap" style="display:none">
+    <div class="tl-row" id="tlRow"></div>
+  </div>
+  <div class="chord-trio" id="chordTrio" style="display:none">
+    <div class="chord-card card-prev" id="cardPrev">
+      <span class="chord-name" id="prevName"></span>
+      <span class="chord-diagram" id="prevDiag"></span>
+    </div>
+    <div class="chord-card card-active" id="cardActive">
+      <span class="chord-name" id="activeName"></span>
+      <span class="chord-diagram" id="activeDiag"></span>
+    </div>
+    <div class="chord-card card-next" id="cardNext">
+      <span class="chord-name" id="nextName"></span>
+      <span class="chord-diagram" id="nextDiag"></span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+const VIDEO_ID = {{ video_id | tojson }};
+
+// ── State ──────────────────────────────────────────────────────
+let chords         = [];
+let beatTimes      = [];
+let beatChords     = [];
+let baseKey        = '';
+let bpm            = 120;
+let transposeSteps = 0;
+let currentBeatIdx = 0;
+
+const PX_PER_BEAT  = 68;
+const EDGE_BEATS   = 14;
+
+// ── CHORD_DIAGRAMS ─────────────────────────────────────────────
+const CHORD_DIAGRAMS = {
+  'C':   { f:[-1,3,2,0,1,0],     b:1 },
+  'C#':  { f:[-1,1,3,3,3,1],     b:4 },
+  'D':   { f:[-1,-1,0,2,3,2],    b:1 },
+  'Eb':  { f:[-1,1,3,3,3,1],     b:6 },
+  'E':   { f:[0,2,2,1,0,0],      b:1 },
+  'F':   { f:[1,3,3,2,1,1],      b:1 },
+  'F#':  { f:[1,3,3,2,1,1],      b:2 },
+  'G':   { f:[3,2,0,0,0,3],      b:1 },
+  'Ab':  { f:[1,3,3,2,1,1],      b:4 },
+  'A':   { f:[-1,0,2,2,2,0],     b:1 },
+  'Bb':  { f:[-1,1,3,3,3,1],     b:1 },
+  'B':   { f:[-1,1,3,3,3,1],     b:2 },
+  'Cm':  { f:[-1,1,3,3,2,1],     b:3 },
+  'C#m': { f:[-1,1,3,3,2,1],     b:4 },
+  'Dm':  { f:[-1,-1,0,2,3,1],    b:1 },
+  'Ebm': { f:[-1,1,3,3,2,1],     b:6 },
+  'Em':  { f:[0,2,2,0,0,0],      b:1 },
+  'Fm':  { f:[1,3,3,1,1,1],      b:1 },
+  'F#m': { f:[1,3,3,1,1,1],      b:2 },
+  'Gm':  { f:[1,3,3,1,1,1],      b:3 },
+  'Abm': { f:[1,3,3,1,1,1],      b:4 },
+  'Am':  { f:[-1,0,2,2,1,0],     b:1 },
+  'Bbm': { f:[-1,1,3,3,2,1],     b:1 },
+  'Bm':  { f:[-1,1,3,3,2,1],     b:2 },
+  'Db':  { f:[-1,1,3,3,3,1],     b:4 },
+  'Gb':  { f:[1,3,3,2,1,1],      b:2 },
+  'Dbm': { f:[-1,1,3,3,2,1],     b:4 },
+  'Gbm': { f:[1,3,3,1,1,1],      b:2 },
+  'C7':   { f:[-1,3,2,3,1,0],    b:1 },
+  'C#7':  { f:[-1,1,3,1,3,1],    b:4 },
+  'D7':   { f:[-1,-1,0,2,1,2],   b:1 },
+  'Eb7':  { f:[-1,-1,1,3,2,3],   b:1 },
+  'E7':   { f:[0,2,0,1,0,0],     b:1 },
+  'F7':   { f:[1,3,1,2,1,1],     b:1 },
+  'F#7':  { f:[1,3,1,2,1,1],     b:2 },
+  'G7':   { f:[3,2,0,0,0,1],     b:1 },
+  'Ab7':  { f:[-1,-1,1,1,1,2],   b:1 },
+  'A7':   { f:[-1,0,2,0,2,0],    b:1 },
+  'Bb7':  { f:[-1,1,3,1,3,1],    b:1 },
+  'B7':   { f:[-1,2,1,2,0,2],    b:1 },
+  'Db7':  { f:[-1,1,3,1,3,1],    b:4 },
+  'Gb7':  { f:[1,3,1,2,1,1],     b:2 },
+  'Cm7':  { f:[-1,1,3,1,2,1],    b:3 },
+  'C#m7': { f:[-1,1,3,1,2,1],    b:4 },
+  'Dm7':  { f:[-1,-1,0,2,1,1],   b:1 },
+  'Ebm7': { f:[-1,-1,1,3,2,2],   b:1 },
+  'Em7':  { f:[0,2,0,0,0,0],     b:1 },
+  'Fm7':  { f:[1,3,1,1,1,1],     b:1 },
+  'F#m7': { f:[1,3,1,1,1,1],     b:2 },
+  'Gm7':  { f:[1,3,1,1,1,1],     b:3 },
+  'Abm7': { f:[1,3,1,1,1,1],     b:4 },
+  'Am7':  { f:[-1,0,2,0,1,0],    b:1 },
+  'Bbm7': { f:[-1,1,3,1,2,1],    b:1 },
+  'Bm7':  { f:[-1,2,0,2,0,2],    b:1 },
+  'Dbm7': { f:[-1,1,3,1,2,1],    b:4 },
+  'Gbm7': { f:[1,3,1,1,1,1],     b:2 },
+  'Cmaj7':  { f:[-1,3,2,0,0,0],  b:1 },
+  'C#maj7': { f:[-1,1,3,2,3,1],  b:4 },
+  'Dmaj7':  { f:[-1,-1,0,2,2,2], b:1 },
+  'Ebmaj7': { f:[-1,-1,1,3,3,3], b:1 },
+  'Emaj7':  { f:[0,2,1,1,0,0],   b:1 },
+  'Fmaj7':  { f:[1,3,2,2,1,0],   b:1 },
+  'F#maj7': { f:[1,3,2,2,1,1],   b:2 },
+  'Gmaj7':  { f:[3,2,0,0,0,2],   b:1 },
+  'Abmaj7': { f:[-1,-1,1,1,1,3], b:1 },
+  'Amaj7':  { f:[-1,0,2,1,2,0],  b:1 },
+  'Bbmaj7': { f:[-1,1,3,2,3,1],  b:1 },
+  'Bmaj7':  { f:[-1,2,1,3,0,2],  b:1 },
+  'Dbmaj7': { f:[-1,1,3,2,3,1],  b:4 },
+  'Gbmaj7': { f:[1,3,2,2,1,1],   b:2 },
+  'Csus2':  { f:[-1,3,0,0,1,3],  b:1 },
+  'C#sus2': { f:[-1,1,3,3,1,1],  b:4 },
+  'Dsus2':  { f:[-1,-1,0,2,3,0], b:1 },
+  'Ebsus2': { f:[-1,-1,1,3,4,1], b:1 },
+  'Esus2':  { f:[0,2,4,4,0,0],   b:1 },
+  'Fsus2':  { f:[-1,-1,3,0,1,1], b:1 },
+  'F#sus2': { f:[-1,1,3,3,1,1],  b:2 },
+  'Gsus2':  { f:[3,0,0,0,3,3],   b:1 },
+  'Absus2': { f:[-1,1,3,3,1,1],  b:4 },
+  'Asus2':  { f:[-1,0,2,2,0,0],  b:1 },
+  'Bbsus2': { f:[-1,1,3,3,1,1],  b:1 },
+  'Bsus2':  { f:[-1,2,4,4,2,2],  b:1 },
+  'Csus4':  { f:[-1,3,3,0,1,1],  b:1 },
+  'C#sus4': { f:[-1,1,3,3,4,1],  b:4 },
+  'Dsus4':  { f:[-1,-1,0,2,3,3], b:1 },
+  'Ebsus4': { f:[-1,-1,1,3,4,4], b:1 },
+  'Esus4':  { f:[0,2,2,2,0,0],   b:1 },
+  'Fsus4':  { f:[1,3,3,3,1,1],   b:1 },
+  'F#sus4': { f:[1,3,3,3,1,1],   b:2 },
+  'Gbsus4': { f:[1,3,3,3,1,1],   b:2 },
+  'Gsus4':  { f:[3,3,0,0,1,3],   b:1 },
+  'Absus4': { f:[1,3,3,3,1,1],   b:4 },
+  'Asus4':  { f:[-1,0,2,2,3,0],  b:1 },
+  'Bbsus4': { f:[-1,1,3,3,4,1],  b:1 },
+  'Bsus4':  { f:[-1,2,4,4,0,0],  b:1 },
+  'C6': { f:[-1,3,2,2,1,0], b:1 },
+  'Cm6': { f:[-1,3,1,2,1,3], b:1 },
+  'CmM7': { f:[-1,3,5,4,5,-1], b:3 },
+  'Cdim7': { f:[-1,3,4,2,4,2], b:2 },
+  'C#6': { f:[-1,4,3,3,2,1], b:1 },
+  'C#m6': { f:[-1,4,2,3,2,4], b:2 },
+  'C#mM7': { f:[-1,4,6,5,6,-1], b:4 },
+  'C#dim7': { f:[-1,4,5,3,5,3], b:3 },
+  'D6': { f:[-1,5,4,4,3,2], b:2 },
+  'Dm6': { f:[-1,5,3,4,3,5], b:3 },
+  'DmM7': { f:[-1,5,7,6,7,-1], b:5 },
+  'Ddim7': { f:[-1,5,6,4,6,4], b:4 },
+  'Eb6': { f:[-1,6,5,5,4,3], b:3 },
+  'Ebm6': { f:[-1,6,4,5,4,6], b:4 },
+  'EbmM7': { f:[-1,6,8,7,8,-1], b:6 },
+  'Ebdim7': { f:[-1,6,7,5,7,5], b:5 },
+  'E6': { f:[-1,7,6,6,5,4], b:4 },
+  'Em6': { f:[-1,7,5,6,5,7], b:5 },
+  'EmM7': { f:[-1,7,9,8,9,-1], b:7 },
+  'Edim7': { f:[-1,7,8,6,8,6], b:6 },
+  'F6': { f:[-1,8,7,7,6,5], b:5 },
+  'Fm6': { f:[-1,8,6,7,6,8], b:6 },
+  'FmM7': { f:[-1,8,10,9,10,-1], b:8 },
+  'Fdim7': { f:[-1,8,9,7,9,7], b:7 },
+  'F#6': { f:[-1,9,8,8,7,6], b:6 },
+  'F#m6': { f:[-1,9,7,8,7,9], b:7 },
+  'F#mM7': { f:[-1,9,11,10,11,-1], b:9 },
+  'F#dim7': { f:[-1,9,10,8,10,8], b:8 },
+  'G6': { f:[-1,10,9,9,8,7], b:7 },
+  'Gm6': { f:[-1,10,8,9,8,10], b:8 },
+  'GmM7': { f:[-1,10,12,11,12,-1], b:10 },
+  'Gdim7': { f:[-1,10,11,9,11,9], b:9 },
+  'Ab6': { f:[-1,11,10,10,9,8], b:8 },
+  'Abm6': { f:[-1,11,9,10,9,11], b:9 },
+  'AbmM7': { f:[-1,4,6,5,6,-1], b:4 },
+  'Abdim7': { f:[-1,11,12,10,12,10], b:10 },
+  'A6': { f:[-1,12,11,11,10,9], b:9 },
+  'Am6': { f:[-1,12,10,11,10,12], b:10 },
+  'AmM7': { f:[-1,0,7,5,5,-1], b:1 },
+  'Adim7': { f:[-1,5,6,5,6,5], b:5 },
+  'Bb6': { f:[-1,6,-1,3,5,3], b:3 },
+  'Bbm6': { f:[-1,6,5,6,5,6], b:5 },
+  'BbmM7': { f:[-1,1,3,2,3,-1], b:1 },
+  'Bbdim7': { f:[-1,6,7,6,7,6], b:6 },
+  'B6': { f:[-1,7,6,6,5,4], b:4 },
+  'Bm6': { f:[-1,7,6,7,6,7], b:6 },
+  'BmM7': { f:[-1,2,4,3,4,-1], b:2 },
+  'Bdim7': { f:[-1,2,3,2,3,2], b:2 },
+  'Cdim':  { f:[-1,3,4,2,4,-1],  b:1 },
+  'C#dim': { f:[-1,-1,2,3,2,3],  b:1 },
+  'Ddim':  { f:[-1,-1,0,1,3,1],  b:1 },
+  'Ebdim': { f:[-1,-1,1,2,4,2],  b:1 },
+  'Edim':  { f:[0,1,2,0,2,-1],   b:1 },
+  'Fdim':  { f:[-1,-1,3,1,0,1],  b:1 },
+  'F#dim': { f:[-1,-1,4,2,1,2],  b:1 },
+  'Gdim':  { f:[3,4,2,3,-1,-1],  b:1 },
+  'Abdim': { f:[4,2,0,1,-1,-1],  b:1 },
+  'Adim':  { f:[-1,0,1,2,1,-1],  b:1 },
+  'Bbdim': { f:[-1,1,2,3,2,-1],  b:1 },
+  'Bdim':  { f:[-1,2,3,4,3,-1],  b:1 },
+  'Caug':  { f:[-1,3,2,1,1,0],   b:1 },
+  'C#aug': { f:[-1,0,3,2,2,1],   b:1 },
+  'Daug':  { f:[-1,-1,0,3,3,2],  b:1 },
+  'Ebaug': { f:[-1,-1,1,0,0,3],  b:1 },
+  'Eaug':  { f:[0,3,2,1,1,0],    b:1 },
+  'Faug':  { f:[1,0,3,2,2,1],    b:1 },
+  'F#aug': { f:[-1,-1,4,3,3,2],  b:1 },
+  'Gaug':  { f:[3,2,1,0,0,3],    b:1 },
+  'Abaug': { f:[-1,-1,2,1,1,0],  b:1 },
+  'Aaug':  { f:[-1,0,3,2,2,1],   b:1 },
+  'Bbaug': { f:[-1,1,0,3,3,2],   b:1 },
+  'Baug':  { f:[-1,2,1,0,0,3],   b:1 },
+  'Cm9':  { f:[-1,3,1,3,3,3],    b:1 },
+  'C#m9': { f:[-1,4,2,4,4,4],    b:1 },
+  'Dm9':  { f:[-1,-1,0,2,1,0],   b:1 },
+  'Em9':  { f:[0,2,0,0,0,2],     b:1 },
+  'Fm9':  { f:[1,3,1,1,1,3],     b:1 },
+  'F#m9': { f:[-1,-1,2,2,2,0],   b:1 },
+  'Gm9':  { f:[3,1,0,3,3,1],     b:1 },
+  'Am9':  { f:[-1,0,2,4,1,0],    b:1 },
+  'Bm9':  { f:[-1,2,0,2,2,2],    b:1 },
+  'C/E':    { f:[0,3,2,0,1,0],     b:1 },
+  'C/G':    { f:[3,3,2,0,1,0],     b:1 },
+  'Cmaj7/G':{ f:[3,3,2,0,0,0],     b:1 },
+  'D/F#':   { f:[2,0,0,2,3,2],     b:1 },
+  'D7/F#':  { f:[2,0,0,2,1,2],     b:1 },
+  'E/G#':   { f:[4,2,2,1,0,0],     b:1 },
+  'F/A':    { f:[-1,0,3,2,1,1],    b:1 },
+  'F/C':    { f:[-1,3,3,2,1,1],    b:1 },
+  'G/B':    { f:[-1,2,0,0,0,3],    b:1 },
+  'G/D':    { f:[-1,-1,0,0,0,3],   b:1 },
+  'A/C#':   { f:[-1,4,2,2,2,0],    b:1 },
+  'A/E':    { f:[0,0,2,2,2,0],     b:1 },
+  'Bb/D':   { f:[-1,-1,0,3,3,1],   b:1 },
+  'Am/E':   { f:[0,0,2,2,1,0],     b:1 },
+  'Am/G':   { f:[3,0,2,2,1,0],     b:1 },
+  'Am7/G':  { f:[3,0,2,0,1,0],     b:1 },
+  'Am7/D':  { f:[-1,-1,0,2,1,0],   b:1 },
+  'Dm/F':   { f:[1,0,0,2,3,1],     b:1 },
+  'Em/B':   { f:[-1,2,2,0,0,0],    b:1 },
+  'Bm/E':   { f:[0,2,4,4,3,0],     b:1 },
+  'Bm7/E':  { f:[0,2,0,2,3,2],     b:1 },
+};
+
+// ── Transposition ───────────────────────────────────────────────
+const CHROMATIC = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+const NOTE_IDX = {};
+CHROMATIC.forEach((n, i) => { NOTE_IDX[n] = i; });
+NOTE_IDX['Db'] = 1; NOTE_IDX['D#'] = 3; NOTE_IDX['Gb'] = 6;
+NOTE_IDX['G#'] = 8; NOTE_IDX['A#'] = 10;
+
+function transposeNote(note, steps) {
+  const idx = NOTE_IDX[note];
+  if (idx === undefined) return note;
+  const shifted = ((idx + steps) % 12 + 12) % 12;
+  const flatMap = {1:'Db',3:'Eb',6:'Gb',8:'Ab',10:'Bb'};
+  return flatMap[shifted] ?? CHROMATIC[shifted];
+}
+
+function transposeChord(chord, steps) {
+  if (steps === 0) return chord;
+  const slashIdx = chord.indexOf('/');
+  if (slashIdx !== -1) {
+    return transposeChord(chord.slice(0, slashIdx), steps) + '/' + transposeNote(chord.slice(slashIdx + 1), steps);
+  }
+  const m = chord.match(/^([A-G][#b]?)(.*)$/);
+  if (!m) return chord;
+  return transposeNote(m[1], steps) + m[2];
+}
+
+function formatChordHTML(raw) {
+  const display = raw.replace(/([A-G])#/, '$1♯').replace(/([A-G])b/, '$1♭');
+  const m = display.match(/^([A-G][♯♭]?)(.*?)$/);
+  if (!m) return display.replace(/♭/g, '<span class="sc-flat">♭</span>');
+  const root = m[1].replace(/♭/g, '<span class="sc-flat">♭</span>');
+  if (!m[2]) return root;
+  return `${root}<span class="sc-chord-suffix">${m[2]}</span>`;
+}
+
+// ── SVG diagram builder ─────────────────────────────────────────
+function buildChordSVG(chordName) {
+  const key = chordName.replace('♯','#').replace('♭','b');
+  let data = CHORD_DIAGRAMS[key];
+  if (!data) {
+    const enh = { 'D#':'Eb', 'G#':'Ab', 'A#':'Bb', 'Db':'C#', 'Gb':'F#' };
+    const m = key.match(/^([A-G][#b])/);
+    if (m && enh[m[1]]) data = CHORD_DIAGRAMS[enh[m[1]] + key.slice(m[1].length)];
+  }
+  if (!data && key.includes('/')) data = CHORD_DIAGRAMS[key.split('/')[0]];
+  if (!data) return '';
+  const { f: strings, b: baseFret } = data;
+  const SX = [6,17,28,39,50,61], NUT_Y=16, FRET_H=12, N_FRETS=4, DOT_R=4.5;
+  const bottom = NUT_Y + N_FRETS * FRET_H;
+  const p = [];
+  if (baseFret === 1) {
+    p.push(`<rect x="${SX[0]}" y="${NUT_Y-3}" width="${SX[5]-SX[0]}" height="3" fill="currentColor" opacity=".6"/>`);
+  } else {
+    p.push(`<line x1="${SX[0]}" y1="${NUT_Y}" x2="${SX[5]}" y2="${NUT_Y}" stroke="currentColor" stroke-width="1.2" opacity=".3"/>`);
+    p.push(`<text x="-2" y="${NUT_Y + FRET_H * 0.75}" text-anchor="middle" font-size="8" font-weight="700" font-family="sans-serif" fill="currentColor" opacity=".85">${baseFret}</text>`);
+  }
+  for (let i = 1; i <= N_FRETS; i++) {
+    const y = NUT_Y + i * FRET_H;
+    p.push(`<line x1="${SX[0]}" y1="${y}" x2="${SX[5]}" y2="${y}" stroke="currentColor" stroke-width=".8" opacity=".18"/>`);
+  }
+  for (const x of SX) {
+    p.push(`<line x1="${x}" y1="${NUT_Y}" x2="${x}" y2="${bottom}" stroke="currentColor" stroke-width="1" opacity=".28"/>`);
+  }
+  for (let i = 0; i < 6; i++) {
+    const x = SX[i], fret = strings[i];
+    if (fret === -1) p.push(`<text x="${x}" y="12" text-anchor="middle" font-size="10" font-family="sans-serif" fill="currentColor" opacity=".5">×</text>`);
+    else if (fret === 0) p.push(`<circle cx="${x}" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1" opacity=".45"/>`);
+  }
+  for (let i = 0; i < 6; i++) {
+    const fret = strings[i];
+    if (fret > 0) p.push(`<circle cx="${SX[i]}" cy="${NUT_Y + (fret - 0.5) * FRET_H}" r="${DOT_R}" fill="currentColor" opacity=".88"/>`);
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 0 84 72" width="140" height="149" aria-hidden="true">${p.join('')}</svg>`;
+}
+
+// ── Beat-chord logic ────────────────────────────────────────────
+function buildBeatChords() {
+  if (!beatTimes.length || !chords.length) return [];
+  const result = [];
+  let lastSegIdx = -1;
+  for (let bi = 0; bi < beatTimes.length; bi++) {
+    const t = beatTimes[bi];
+    const nextBt = beatTimes[bi + 1] ?? (t + (t - (beatTimes[bi - 1] ?? t - 0.5)));
+    const mid = (t + nextBt) / 2;
+    const segIdxByBt = chords.findIndex(c => c.start <= t && c.end > t);
+    const segIdxByMid = chords.findIndex(c => c.start <= mid && c.end > mid);
+    const segIdx = segIdxByBt >= 0 ? segIdxByBt : segIdxByMid;
+    const chordName = segIdx >= 0 ? chords[segIdx].chord : 'N';
+    if (result.length && result[result.length - 1].chord === chordName && segIdx === lastSegIdx) {
+      result[result.length - 1].beatCount++;
+    } else {
+      result.push({ chord: chordName, beatStart: bi, beatCount: 1 });
+      lastSegIdx = segIdx;
+    }
+  }
+  return result;
+}
+
+function beatChordIdxAt(bi) {
+  for (let i = 0; i < beatChords.length; i++) {
+    const bc = beatChords[i];
+    if (bi >= bc.beatStart && bi < bc.beatStart + bc.beatCount) return i;
+  }
+  return -1;
+}
+
+// ── Timeline rendering ──────────────────────────────────────────
+function renderTimeline() {
+  const tlRow = document.getElementById('tlRow');
+  const px = window.matchMedia('(pointer: coarse)').matches ? 76 : PX_PER_BEAT;
+  let html = `<div class="tl-pad empty" style="width:${px * EDGE_BEATS}px"></div>`;
+  for (let bi = 0; bi < beatTimes.length; bi++) {
+    const bci = beatChordIdxAt(bi);
+    const bc = bci >= 0 ? beatChords[bci] : null;
+    const isFirst = bc && bc.beatStart === bi;
+    const measureStart = bi % 4 === 0 ? ' measure-start' : '';
+    const chord = bc ? transposeChord(bc.chord, transposeSteps) : 'N';
+    const isN = chord === 'N';
+    const label = isFirst ? `<span class="beat-name${isN ? ' beat-n' : ''}">${isN ? 'N' : formatChordHTML(chord)}</span>` : '';
+    html += `<div class="tl-beat${measureStart}" data-bi="${bi}">${label}</div>`;
+  }
+  html += `<div class="tl-pad empty" style="width:${px * EDGE_BEATS}px"></div>`;
+  tlRow.innerHTML = html;
+  tlRow.querySelectorAll('.tl-beat').forEach(el => {
+    el.addEventListener('click', () => goToBeat(parseInt(el.dataset.bi, 10)));
+  });
+}
+
+// ── Display update ──────────────────────────────────────────────
+function setCard(elName, elDiag, chord) {
+  if (!chord || chord === 'N') {
+    elName.innerHTML = '<span style="color:var(--muted);font-size:1.5rem">—</span>';
+    elDiag.innerHTML = '';
+    return;
+  }
+  const transposed = transposeChord(chord, transposeSteps);
+  elName.innerHTML = formatChordHTML(transposed);
+  elDiag.innerHTML = buildChordSVG(transposed);
+}
+
+function refreshDisplay(bi) {
+  const bci = beatChordIdxAt(bi);
+  const prevBci = bci > 0 ? bci - 1 : -1;
+  const nextBci = bci >= 0 && bci < beatChords.length - 1 ? bci + 1 : -1;
+
+  setCard(
+    document.getElementById('prevName'), document.getElementById('prevDiag'),
+    prevBci >= 0 ? beatChords[prevBci].chord : null
+  );
+  setCard(
+    document.getElementById('activeName'), document.getElementById('activeDiag'),
+    bci >= 0 ? beatChords[bci].chord : null
+  );
+  setCard(
+    document.getElementById('nextName'), document.getElementById('nextDiag'),
+    nextBci >= 0 ? beatChords[nextBci].chord : null
+  );
+
+  // Highlight active beat
+  document.querySelectorAll('.tl-beat.active').forEach(el => el.classList.remove('active'));
+  const activeEl = document.querySelector(`.tl-beat[data-bi="${bi}"]`);
+  if (activeEl) {
+    activeEl.classList.add('active');
+    // Scroll timeline to center on active beat
+    const tl = document.getElementById('timelineWrap');
+    const tlRect = tl.getBoundingClientRect();
+    const elRect = activeEl.getBoundingClientRect();
+    const target = tl.scrollLeft + (elRect.left - tlRect.left) - (tlRect.width / 2) + (elRect.width / 2);
+    tl.scrollTo({ left: target, behavior: 'instant' });
+  }
+}
+
+function goToBeat(bi) {
+  currentBeatIdx = Math.max(0, Math.min(beatTimes.length - 1, bi));
+  refreshDisplay(currentBeatIdx);
+}
+
+// ── Transpose ───────────────────────────────────────────────────
+function updateTransposeLabel() {
+  const lbl = document.getElementById('transpLabel');
+  if (transposeSteps === 0) { lbl.textContent = 'Original'; return; }
+  const sign = transposeSteps > 0 ? '+' : '';
+  lbl.textContent = `${sign}${transposeSteps} semitone${Math.abs(transposeSteps) !== 1 ? 's' : ''}`;
+}
+
+document.getElementById('transpDown').addEventListener('click', () => {
+  transposeSteps = ((transposeSteps - 1 + 12) % 12) - (transposeSteps <= -6 ? -12 : 0);
+  if (transposeSteps > 6) transposeSteps -= 12;
+  updateTransposeLabel();
+  renderTimeline();
+  refreshDisplay(currentBeatIdx);
+});
+document.getElementById('transpUp').addEventListener('click', () => {
+  transposeSteps = ((transposeSteps + 1 + 12) % 12);
+  if (transposeSteps > 6) transposeSteps -= 12;
+  updateTransposeLabel();
+  renderTimeline();
+  refreshDisplay(currentBeatIdx);
+});
+
+// ── Keyboard navigation ─────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!beatTimes.length) return;
+  if (e.key === 'ArrowRight') { e.preventDefault(); goToBeat(currentBeatIdx + 1); }
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); goToBeat(currentBeatIdx - 1); }
+});
+
+// ── Load chords ─────────────────────────────────────────────────
+function showViewer(data) {
+  chords     = data.chords    || [];
+  beatTimes  = data.beat_times || [];
+  baseKey    = data.key        || '';
+  bpm        = data.bpm        || 120;
+  beatChords = buildBeatChords();
+
+  document.getElementById('stateLoading').style.display = 'none';
+  document.getElementById('songTitle').textContent = data.title || VIDEO_ID;
+  document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
+  document.getElementById('keyBadge').style.display = '';
+  document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
+  document.getElementById('bpmBadge').style.display = '';
+  document.getElementById('transpCtrl').style.display = '';
+  document.getElementById('ytLink').style.display = '';
+  document.getElementById('timelineWrap').style.display = '';
+  document.getElementById('chordTrio').style.display = '';
+
+  renderTimeline();
+  goToBeat(0);
+}
+
+function showError(title, msg) {
+  document.getElementById('stateLoading').style.display = 'none';
+  document.getElementById('stateError').style.display = '';
+  document.getElementById('errTitle').textContent = title;
+  document.getElementById('errMsg').textContent = msg;
+}
+
+(async () => {
+  try {
+    const res = await fetch(`/api/chords/${VIDEO_ID}`);
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showError('Chords not found', 'This song hasn\'t been analyzed yet. Analyze it with the extension or the web player.');
+    } else {
+      showViewer(data);
+    }
+  } catch (err) {
+    showError('Failed to load', 'Could not reach the server. Please try again.');
+  }
+})();
+</script>
+</body>
+</html>
