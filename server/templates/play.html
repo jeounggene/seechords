@@ -1167,6 +1167,11 @@ function renderChordSheet() {
   const el = document.getElementById('chordSheetWrap');
   if (!el || !syncedLyrics) return;
 
+  if (!beatChords.length || !beatTimes.length) {
+    el.innerHTML = '<div class="cs-no-lyrics">No chord timing data available</div>';
+    return;
+  }
+
   const lines = syncedLyrics.filter(l => l.text.trim() !== '');
   if (!lines.length) { _showNoLyrics(); return; }
 
@@ -1219,6 +1224,32 @@ function renderChordSheet() {
 
 function _escSheet(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+let _csActiveLine = null;
+
+function updateChordSheetHighlight(currentTime) {
+  const wrap = document.getElementById('chordSheetWrap');
+  if (!wrap || !syncedLyrics) return;
+
+  const groups = wrap.querySelectorAll('.cs-line-group');
+  let activeGroup = null;
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const t = parseFloat(groups[i].dataset.time);
+    if (currentTime >= t) { activeGroup = groups[i]; break; }
+  }
+
+  if (activeGroup && activeGroup !== _csActiveLine) {
+    if (_csActiveLine) _csActiveLine.classList.remove('active');
+    activeGroup.classList.add('active');
+    _csActiveLine = activeGroup;
+
+    // Auto-scroll: keep active line in the upper third of the panel
+    const wrapRect = wrap.getBoundingClientRect();
+    const lineRect = activeGroup.getBoundingClientRect();
+    const offset = lineRect.top - wrapRect.top - wrapRect.height * 0.3;
+    wrap.scrollTop += offset;
+  }
 }
 
 let currentVideoId  = null;
@@ -2122,6 +2153,8 @@ function startTracking() {
       }
       if (bi !== currentBeatIdx) goToBeat(bi);
     }
+    // Sync chord sheet highlight
+    updateChordSheetHighlight(cur);
     rafId = requestAnimationFrame(tick);
   }
   rafId = requestAnimationFrame(tick);
@@ -2202,6 +2235,8 @@ function initPlayer(data) {
   document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
   document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
 
+  syncedLyrics = null;
+  _csActiveLine = null;
   // Fetch lyrics for chord sheet (desktop only)
   fetchLyrics(title);
 
@@ -2496,6 +2531,9 @@ function refreshDisplay() {
   });
 
   if (currentChordIdx >= 0) setCardContent(currentChordIdx);
+
+  // Re-render chord sheet with new transposition
+  renderChordSheet();
 }
 
 </script>
