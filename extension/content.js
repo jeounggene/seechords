@@ -399,10 +399,10 @@ function formatChordHTML(raw) {
 function buildChordSVG(chordName) {
   const key  = chordName.replace('♯','#').replace('♭','b');
   let data = CHORD_DIAGRAMS[key];
-  // Enharmonic fallback: map sharp names to their flat equivalents
+  // Enharmonic fallback: sharp↔flat (covers Db→C#, Gb→F# and D#→Eb etc.)
   if (!data) {
-    const enharmonic = { 'D#':'Eb', 'G#':'Ab', 'A#':'Bb' };
-    const re = /^([A-G]#)/;
+    const enharmonic = { 'D#':'Eb', 'G#':'Ab', 'A#':'Bb', 'Db':'C#', 'Gb':'F#' };
+    const re = /^([A-G][#b])/;
     const m = key.match(re);
     if (m && enharmonic[m[1]]) {
       data = CHORD_DIAGRAMS[enharmonic[m[1]] + key.slice(m[1].length)];
