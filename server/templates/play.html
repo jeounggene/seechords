@@ -893,6 +893,52 @@
     cursor: pointer;
     touch-action: manipulation;
   }
+  /* ── Chord Sheet (desktop only) ── */
+  .chord-sheet-wrap {
+    max-height: 45vh;
+    overflow-y: auto;
+    padding: 16px 20px;
+    margin-top: 8px;
+    background: rgba(255,255,255,.03);
+    border-radius: 8px;
+    scroll-behavior: smooth;
+  }
+  .chord-sheet-wrap::-webkit-scrollbar { width: 4px; }
+  .chord-sheet-wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 2px; }
+  .cs-line {
+    position: relative;
+    margin-bottom: 4px;
+    font-family: 'Courier New', monospace;
+    white-space: pre;
+    line-height: 1.3;
+  }
+  .cs-chord-line {
+    color: #f0c040;
+    font-size: 0.85em;
+    font-weight: 600;
+    min-height: 1.2em;
+    user-select: text;
+  }
+  .cs-lyric-line {
+    color: rgba(255,255,255,.85);
+    font-size: 0.9em;
+    user-select: text;
+  }
+  .cs-line-group.active .cs-lyric-line {
+    color: #fff;
+  }
+  .cs-line-group.active .cs-chord-line {
+    color: #ffd700;
+  }
+  .cs-no-lyrics {
+    color: rgba(255,255,255,.3);
+    font-style: italic;
+    padding: 12px 0;
+    text-align: center;
+  }
+  @media (orientation: portrait) and (max-width: 900px) {
+    .chord-sheet-wrap { display: none; }
+  }
   /* ── Rotate screen nudge (portrait mobile only) ── */
   /* ── Rotate overlay on chord area (portrait mobile only) ── */
   .rotate-prompt {
@@ -1063,6 +1109,116 @@ function _sourceLabel(src) {
   if (src && src.indexOf('btc-') === 0) return 'Made by SeeChords ' + src.replace('btc-', 'Model ');
   if (src === 'user-uploaded') return 'Made by SeeChords Model v1';
   return 'Made by SeeChords';
+}
+
+// ── Lyrics fetching (LRCLIB) ───────────────────────────────
+let syncedLyrics = null; // [{time: float, text: string}, ...] or null
+
+async function fetchLyrics(title) {
+  syncedLyrics = null;
+  const el = document.getElementById('chordSheetWrap');
+  if (!el) return; // mobile — no sheet
+
+  // Clean title: remove "(Official Video)", "[Official Audio]", etc.
+  const clean = title
+    .replace(/\s*[\(\[](official|lyric|music|audio|visualizer|live|hd|hq|4k|video|mv)[\s\w]*[\)\]]/gi, '')
+    .replace(/\s*\|.*$/, '')
+    .trim();
+
+  // Try to split into artist - title
+  let artist = '', track = clean;
+  const dash = clean.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  if (dash) { artist = dash[1].trim(); track = dash[2].trim(); }
+
+  const params = new URLSearchParams({ track_name: track });
+  if (artist) params.set('artist_name', artist);
+
+  try {
+    const res = await fetch('https://lrclib.net/api/search?' + params.toString());
+    if (!res.ok) { _showNoLyrics(); return; }
+    const results = await res.json();
+    // Find first result with synced lyrics
+    const match = results.find(r => r.syncedLyrics);
+    if (!match) { _showNoLyrics(); return; }
+
+    // Parse LRC format: [mm:ss.xx] text
+    syncedLyrics = [];
+    for (const line of match.syncedLyrics.split('\n')) {
+      const m = line.match(/^\[(\d+):(\d+\.\d+)\]\s*(.*)$/);
+      if (m) {
+        const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
+        syncedLyrics.push({ time, text: m[3] });
+      }
+    }
+    if (!syncedLyrics.length) { syncedLyrics = null; _showNoLyrics(); return; }
+    renderChordSheet();
+  } catch (e) {
+    console.warn('[SeeChords] Lyrics fetch failed:', e);
+    _showNoLyrics();
+  }
+}
+
+function _showNoLyrics() {
+  const el = document.getElementById('chordSheetWrap');
+  if (el) el.innerHTML = '<div class="cs-no-lyrics">No lyrics available for this song</div>';
+}
+
+function renderChordSheet() {
+  const el = document.getElementById('chordSheetWrap');
+  if (!el || !syncedLyrics) return;
+
+  const lines = syncedLyrics.filter(l => l.text.trim() !== '');
+  if (!lines.length) { _showNoLyrics(); return; }
+
+  let html = '';
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const nextTime = li + 1 < lines.length ? lines[li + 1].time : Infinity;
+    const lyricText = line.text;
+    if (!lyricText) continue;
+
+    // Find all chord changes within this lyric line's time range
+    const lineChords = [];
+    for (const bc of beatChords) {
+      const chordTime = beatTimes[bc.beatStart] ?? 0;
+      if (chordTime >= line.time && chordTime < nextTime) {
+        const ch = (bc.chord === 'N') ? '' : transposeChord(bc.chord, transposeSteps);
+        if (ch) lineChords.push({ chord: ch, time: chordTime });
+      }
+    }
+
+    // Position chords above lyrics by mapping chord time to character position
+    const lineDuration = nextTime - line.time;
+    let chordStr = '';
+    if (lineChords.length > 0) {
+      const chars = new Array(Math.max(lyricText.length, 1)).fill(' ');
+      for (const lc of lineChords) {
+        const frac = lineDuration > 0 ? (lc.time - line.time) / lineDuration : 0;
+        let pos = Math.round(frac * (lyricText.length - 1));
+        pos = Math.max(0, Math.min(lyricText.length - 1, pos));
+        const chordName = lc.chord;
+        for (let ci = 0; ci < chordName.length; ci++) {
+          const idx = pos + ci;
+          if (idx < chars.length) chars[idx] = chordName[ci];
+          else chars.push(chordName[ci]);
+        }
+      }
+      chordStr = chars.join('');
+    }
+
+    html += '<div class="cs-line-group" data-time="' + line.time + '">';
+    if (chordStr.trim()) {
+      html += '<div class="cs-line cs-chord-line">' + _escSheet(chordStr) + '</div>';
+    }
+    html += '<div class="cs-line cs-lyric-line">' + _escSheet(lyricText) + '</div>';
+    html += '</div>';
+  }
+
+  el.innerHTML = html || '<div class="cs-no-lyrics">No lyrics available</div>';
+}
+
+function _escSheet(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 let currentVideoId  = null;
@@ -1650,14 +1806,8 @@ function buildPlayerHTML(title) {
         </div>
         <span class="audio-loading" id="audioLoading">Loading…</span>
       </div>
-      <div class="a2hs-prompt" id="a2hsPrompt">
-        <span class="a2hs-prompt-icon">📲</span>
-        <span class="a2hs-prompt-text">
-          <strong>Add to Home Screen</strong>
-          Tap Share <svg width="13" height="16" viewBox="0 0 13 16" fill="none" style="display:inline-block;vertical-align:middle;margin:0 2px" aria-hidden="true"><polyline points="6.5,9 6.5,0" stroke="white" stroke-width="1.5" stroke-linecap="round"/><polyline points="3.5,3.5 6.5,0 9.5,3.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M1,7 L1,15 L12,15 L12,7" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg> → "Add to Home Screen"<br>for a fullscreen experience with no browser bar
-        </span>
-        <button class="a2hs-prompt-btn" id="a2hsDismiss">Got it</button>
-      </div>
+      ${!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? '<div class="chord-sheet-wrap" id="chordSheetWrap"><div class="cs-no-lyrics">Loading lyrics…</div></div>' : ''}
+      ${/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && !window.navigator.standalone && !window.matchMedia('(display-mode: standalone)').matches ? '<div class="a2hs-prompt" id="a2hsPrompt"><span class="a2hs-prompt-icon">📲</span><span class="a2hs-prompt-text"><strong>Add to Home Screen</strong>Tap Share → "Add to Home Screen"<br>for a fullscreen experience with no browser bar</span><button class="a2hs-prompt-btn" id="a2hsDismiss">Got it</button></div>' : ''}
     </div>
   `;
 }
@@ -2051,6 +2201,9 @@ function initPlayer(data) {
   // Badges
   document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
   document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
+
+  // Fetch lyrics for chord sheet (desktop only)
+  fetchLyrics(title);
 
   // Version selector — fetch all versions for this video
   var vsel = document.getElementById('versionSelect');
