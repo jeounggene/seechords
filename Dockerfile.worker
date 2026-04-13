@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# Deno is needed as a JS runtime for yt-dlp's YouTube JS challenge solver
 RUN curl -fsSL https://deno.land/install.sh | sh
 ENV DENO_DIR=/root/.deno
 ENV PATH="/root/.deno/bin:${PATH}"
@@ -27,9 +28,15 @@ RUN pip install --no-cache-dir \
 # YouTube changes often — keep yt-dlp current for extractor fixes
 # [default] extras pulls in EJS JS solver + other optional deps
 RUN pip install --no-cache-dir -U "yt-dlp[default]"
-# PO token plugin: auto-generates Proof of Origin tokens via headless browser
-# to bypass YouTube bot detection from datacenter IPs
-RUN pip install --no-cache-dir bgutil-ytdlp-pot-provider
+
+# PO token: Rust-based bgutil server + yt-dlp plugin (no cookies needed)
+RUN curl -fsSL -o /usr/local/bin/bgutil-pot \
+    https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-pot-linux-x86_64 \
+    && chmod +x /usr/local/bin/bgutil-pot
+# yt-dlp loads plugin zips directly from ~/yt-dlp-plugins/
+RUN mkdir -p /root/yt-dlp-plugins \
+    && curl -fsSL -o /root/yt-dlp-plugins/bgutil-ytdlp-pot-provider-rs.zip \
+    https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v0.8.1/bgutil-ytdlp-pot-provider-rs.zip
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir https://github.com/CPJKU/beat_this/archive/main.zip
 
@@ -63,4 +70,7 @@ torch.hub.load_state_dict_from_url( \
     file_name='beat_this-small0.ckpt', map_location='cpu'); \
 print('Cached beat_this small0 checkpoint')"
 
-CMD ["python", "worker.py"]
+COPY scripts/worker-entrypoint.sh /app/worker-entrypoint.sh
+RUN chmod +x /app/worker-entrypoint.sh
+
+CMD ["/app/worker-entrypoint.sh"]

@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """Ephemeral worker: download audio from YouTube, run chord analysis, write results to Turso.
 
+YouTube auth is handled by the bgutil PO token server (started by worker-entrypoint.sh).
+The yt-dlp plugin auto-detects it on localhost:4416 — no cookies needed.
+
 Reads configuration from environment variables:
   JOB_ID              – unique job identifier
   VIDEO_ID            – YouTube video ID (11 chars)
   TITLE               – optional song title override
   TURSO_DATABASE_URL  – Turso database URL
   TURSO_AUTH_TOKEN    – Turso auth token
-  YTDLP_COOKIEFILE    – optional path to Netscape cookies.txt on this machine (local dev)
-  YTDLP_COOKIES_B64   – optional base64 of cookies.txt (set on API; forwarded to worker on Fly)
-  YTDLP_YOUTUBE_PLAYER_CLIENT – optional override (e.g. web, android). Otherwise we use a
-    ChordMini-style rotation (yt-dlp + bestaudio + multiple innertube clients, like yt-mp3-go).
+  YTDLP_YOUTUBE_PLAYER_CLIENT – optional override (e.g. web, android).
   PUBLIC_APP_URL       – API base URL (default https://seechords.fly.dev) for WAV cache GET/PUT.
   WAV_CACHE_SECRET     – Bearer token shared with API; workers upload WAV after download for reuse.
   SKIP_YTDLP_DOWNLOAD  – if '1', fetch cached WAV from API instead of yt-dlp (set by API on cache hit).
@@ -22,7 +22,6 @@ import os
 import sys
 import json
 import math
-import base64
 import glob
 import time
 import threading
@@ -34,146 +33,35 @@ import urllib.request
 
 import libsql_experimental as libsql
 
-_YTDLP_COOKIE_PATH = None
 # Set after a successful yt-dlp download so --get-title uses the same player client.
 _SUCCESS_YTDLP_PLAYER_CLIENT = None
-
-# Browser-like UA so session cookies match what YouTube expects alongside --cookies.
-_YTDLP_CHROME_UA = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-)
+NTFY_TOPIC = os.environ.get('NTFY_TOPIC', '')
 
 
-def _decode_cookie_b64(b64: str) -> bytes:
-    s = ''.join((b64 or '').split())
-    pad = (-len(s)) % 4
-    if pad:
-        s += '=' * pad
-    return base64.b64decode(s)
-
-
-def _normalize_netscape_cookie_bytes(raw: bytes) -> bytes:
-    """Strip BOM, normalize newlines, ensure Netscape header so yt-dlp accepts the file."""
-    if not raw:
-        raise ValueError('empty after decode')
-    text = raw.decode('utf-8-sig')
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    if not text.endswith('\n'):
-        text += '\n'
-    head_ok = any(
-        (ln.startswith('# Netscape') or 'HTTP Cookie File' in ln[:80])
-        for ln in text.split('\n')[:8]
-    )
-    if not head_ok:
-        text = '# Netscape HTTP Cookie File\n' + text
-    return text.encode('utf-8')
-
-
-def _cookie_data_line_count(path: str) -> int:
+def _ntfy(title: str, message: str, priority: str = 'high', tags: str = 'warning'):
+    """Send a push notification via ntfy.sh. Silently ignores errors."""
+    if not NTFY_TOPIC:
+        return
     try:
-        with open(path, encoding='utf-8', errors='replace') as f:
-            n = 0
-            for line in f:
-                s = line.strip()
-                if not s or s.startswith('#'):
-                    continue
-                if '\t' in s and len(s.split('\t')) >= 7:
-                    n += 1
-            return n
-    except OSError:
-        return -1
-
-
-def _init_ytdlp_cookies():
-    """Resolve cookies once: local file, or YTDLP_COOKIES_B64 written to /tmp."""
-    global _YTDLP_COOKIE_PATH
-    p = (os.environ.get('YTDLP_COOKIEFILE') or '').strip()
-    if p and os.path.isfile(p):
-        _YTDLP_COOKIE_PATH = p
-        n = _cookie_data_line_count(p)
-        print(
-            f'[Worker] yt-dlp cookies: file {_YTDLP_COOKIE_PATH} ({n} tab-separated rows)',
-            flush=True,
+        req = urllib.request.Request(
+            f'https://ntfy.sh/{NTFY_TOPIC}',
+            data=message.encode(),
+            headers={'Title': title, 'Priority': priority, 'Tags': tags},
         )
-        return
-    b64 = (os.environ.get('YTDLP_COOKIES_B64') or '').strip()
-    if b64:
-        out = '/tmp/yt_cookies.txt'
-        try:
-            raw = _decode_cookie_b64(b64)
-            normalized = _normalize_netscape_cookie_bytes(raw)
-            with open(out, 'wb') as f:
-                f.write(normalized)
-            os.chmod(out, 0o600)
-            _YTDLP_COOKIE_PATH = out
-            n = _cookie_data_line_count(out)
-            print(
-                f'[Worker] yt-dlp cookies: YTDLP_COOKIES_B64 -> {out} '
-                f'({len(normalized)} bytes, {n} cookie rows)',
-                flush=True,
-            )
-            head = normalized[:120].decode('utf-8', errors='replace')
-            if 'youtube' not in head.lower() and 'google' not in head.lower():
-                print(
-                    '[Worker] WARNING: cookie file header lines do not mention youtube/google; '
-                    'ensure export includes youtube.com / google.com session cookies.',
-                    flush=True,
-                )
-            if n == 0:
-                print(
-                    '[Worker] WARNING: no tab-separated cookie rows found — file may be wrong format.',
-                    flush=True,
-                )
-        except Exception as e:
-            _YTDLP_COOKIE_PATH = None
-            print(f'[Worker] WARNING: YTDLP_COOKIES_B64 invalid: {e}', flush=True)
-        return
-    if p:
-        print(
-            f'[Worker] WARNING: YTDLP_COOKIEFILE={p!r} not found on this machine; '
-            'configure cookies on the API app (YTDLP_COOKIEFILE path or YTDLP_COOKIES_B64).',
-            flush=True,
-        )
-    else:
-        print(
-            '[Worker] No yt-dlp cookies configured (datacenter IPs often need YouTube cookies).',
-            flush=True,
-        )
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass
 
+def _ytdlp_player_client_args():
+    """Return extractor args for YouTube player client selection.
 
-def _ytdlp_cookie_args():
-    if _YTDLP_COOKIE_PATH:
-        return ['--cookies', _YTDLP_COOKIE_PATH]
-    return []
-
-
-def _ytdlp_browser_headers_args():
-    """When using exported cookies, send Chrome-like UA / Accept-Language (matches many exports)."""
-    if not _YTDLP_COOKIE_PATH:
-        return []
-    return [
-        '--add-header',
-        f'User-Agent:{_YTDLP_CHROME_UA}',
-        '--add-header',
-        'Accept-Language:en-US,en;q=0.9',
-    ]
-
-
-def _ytdlp_extractor_args_for_client(player_client: str):
-    if not player_client or player_client.lower() in ('none', 'off', '-'):
-        return []
-    return ['--extractor-args', f'youtube:player_client={player_client}']
-
-
-def _ytdlp_player_clients_to_try():
-    """ChordMini / yt-mp3-go style: try several innertube clients (cookies → web-first for session)."""
+    Uses mweb as primary (recommended for PO token on datacenter IPs),
+    with default clients as fallback. The PO token plugin handles GVS auth.
+    """
     o = (os.environ.get('YTDLP_YOUTUBE_PLAYER_CLIENT') or '').strip()
     if o and o.lower() not in ('none', 'off', '-'):
-        return [o]
-    if _YTDLP_COOKIE_PATH:
-        return ['web', 'ios', 'android', 'mediaconnect', 'android_embedded', 'tv_embedded', 'mweb']
-    return ['android', 'ios', 'mediaconnect', 'android_embedded', 'tv_embedded', 'web', 'mweb']
+        return ['--extractor-args', f'youtube:player_client={o}']
+    return ['--extractor-args', 'youtube:player_client=default,mweb']
 
 
 def _cleanup_partial_downloads(job_id: str) -> None:
@@ -222,11 +110,11 @@ def _update_job(job_id, **kwargs):
 
 def _cache_put(video_id, title, key, bpm, chords_data, beat_times, downbeats=None):
     con = _get_db()
-    con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = 'btc-v2.1'", (video_id,))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, downbeats, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'btc-v2', ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'btc-v2.1', ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
           json.dumps(downbeats) if downbeats else None,
@@ -377,160 +265,97 @@ def main():
                 message='Cached audio ready — analyzing chords…',
             )
         else:
-            _init_ytdlp_cookies()
-            b64_in_env = bool((os.environ.get('YTDLP_COOKIES_B64') or '').strip())
-            print(
-                f'[Worker] yt-dlp cookies: env B64 present={b64_in_env}, '
-                f'file ready={bool(_YTDLP_COOKIE_PATH)}',
-                flush=True,
-            )
-            clients = _ytdlp_player_clients_to_try()
-            print(f'[Worker] yt-dlp will try player_client order: {clients}', flush=True)
-
             yt_url = f'https://www.youtube.com/watch?v={video_id}'
             ytdlp = shutil.which('yt-dlp')
             if not ytdlp:
                 raise RuntimeError('yt-dlp not found')
 
             out_template = f'/tmp/{job_id}_audio.%(ext)s'
-            MAX_DL_RETRIES = 2
-            last_dl_exc = None
+            client_args = _ytdlp_player_client_args()
+            print(f'[Worker] yt-dlp download with {client_args} (PO token auth)', flush=True)
 
-            for dl_attempt in range(MAX_DL_RETRIES + 1):
-                if dl_attempt > 0:
-                    delay = 20 * dl_attempt
-                    print(f'[Worker] Download retry {dl_attempt}/{MAX_DL_RETRIES} in {delay}s…', flush=True)
-                    _update_job(
-                        job_id, status='processing', progress=5,
-                        message=f'Download failed — retrying in {delay}s… (attempt {dl_attempt + 1}/{MAX_DL_RETRIES + 1})',
-                    )
-                    time.sleep(delay)
-                    _cleanup_partial_downloads(job_id)
+            # Phase 1: Download audio
+            _update_job(
+                job_id,
+                status='processing',
+                progress=5,
+                message='Downloading from YouTube… (usually 1–3 min)',
+            )
+            hb_state = {'active': True, 'phase': 'download', 'client': '—'}
+            hb_stop = threading.Event()
+            hb_t = threading.Thread(
+                target=_heartbeat_job_message, args=(job_id, hb_stop, hb_state), daemon=True
+            )
+            hb_t.start()
 
-                # Phase 1: Download audio (ChordMini / yt-mp3-go style: yt-dlp bestaudio + ffmpeg later)
+            try:
+                cmd = (
+                    [ytdlp]
+                    + client_args
+                    + [
+                        '-f', 'bestaudio/best',
+                        '--no-playlist', '--no-check-certificates',
+                        '--retries', '3',
+                        '--fragment-retries', '3',
+                        '--remote-components', 'ejs:github',
+                        '-o', out_template, yt_url,
+                    ]
+                )
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                last_stderr = result.stderr or ''
+                audio_path = _find_downloaded_audio_file(job_id) or ''
+
+                if result.returncode != 0 or not audio_path:
+                    err_msg = last_stderr[-800:] if last_stderr else 'yt-dlp download failed'
+                    if 'sign in' in err_msg.lower() or 'not a bot' in err_msg.lower():
+                        _ntfy(
+                            'SeeChords: YouTube download blocked',
+                            f'Video {video_id} blocked. PO token may need update.',
+                        )
+                    raise RuntimeError(f'Download failed: {err_msg}')
+
+                print(f'[Worker] yt-dlp download ok -> {audio_path}', flush=True)
+
+                # Get title from yt-dlp if not provided
+                if not title:
+                    try:
+                        t_result = subprocess.run(
+                            [ytdlp] + client_args
+                            + ['--get-title', '--no-playlist', yt_url],
+                            capture_output=True, text=True, timeout=15,
+                        )
+                        if t_result.returncode == 0 and t_result.stdout.strip():
+                            title = t_result.stdout.strip()
+                        else:
+                            title = video_id
+                    except Exception:
+                        title = video_id
+
+                print(f'[Worker] Downloaded audio: {os.path.getsize(audio_path)} bytes', flush=True)
                 _update_job(
                     job_id,
                     status='processing',
-                    progress=5,
-                    message='Downloading from YouTube… (usually 1–3 min — progress updates every ~15s)',
+                    progress=15,
+                    message='Download done — converting to WAV…',
                 )
-                hb_state = {'active': True, 'phase': 'download', 'client': '—'}
-                hb_stop = threading.Event()
-                hb_t = threading.Thread(
-                    target=_heartbeat_job_message, args=(job_id, hb_stop, hb_state), daemon=True
+
+                hb_state['phase'] = 'ffmpeg'
+                hb_state['progress'] = 15
+                # Phase 2: Convert to WAV
+                subprocess.run(
+                    ['ffmpeg', '-i', audio_path, '-vn', '-ar', '44100', '-ac', '1',
+                     wav_path, '-y'],
+                    capture_output=True, timeout=180,
                 )
-                hb_t.start()
+                if not os.path.exists(wav_path):
+                    raise RuntimeError('FFmpeg conversion failed')
 
-                result = None
-                last_stderr = ''
-                audio_path = ''
-                try:
-                    for client in clients:
-                        hb_state['client'] = client
-                        _update_job(
-                            job_id,
-                            status='processing',
-                            progress=5,
-                            message=(
-                                f'Downloading from YouTube… trying “{client}” player '
-                                '(may take up to 3 min)'
-                            ),
-                        )
-                        _cleanup_partial_downloads(job_id)
-                        cmd = (
-                            [ytdlp]
-                            + _ytdlp_cookie_args()
-                            + _ytdlp_browser_headers_args()
-                            + _ytdlp_extractor_args_for_client(client)
-                            + [
-                                '-f', 'bestaudio/best',
-                                '--no-playlist', '--no-check-certificates',
-                                '--retries', '3',
-                                '--fragment-retries', '3',
-                                '--remote-components', 'ejs:github',
-                                '-o', out_template, yt_url,
-                            ]
-                        )
-                        print(f'[Worker] yt-dlp download try player_client={client}', flush=True)
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
-                        last_stderr = result.stderr or ''
-                        audio_path = _find_downloaded_audio_file(job_id) or ''
-                        if result.returncode == 0 and audio_path and os.path.getsize(audio_path) > 0:
-                            _SUCCESS_YTDLP_PLAYER_CLIENT = client
-                            print(f'[Worker] yt-dlp download ok with player_client={client} -> {audio_path}', flush=True)
-                            break
-
-                    if result is None or result.returncode != 0 or not audio_path:
-                        err_msg = (
-                            last_stderr[:800]
-                            if last_stderr
-                            else (result.stderr[:800] if result else 'yt-dlp download failed')
-                        )
-                        if 'sign in' in err_msg.lower() or 'not a bot' in err_msg.lower():
-                            if _YTDLP_COOKIE_PATH is None:
-                                err_msg += (
-                                    ' — Set YTDLP_COOKIES_B64 on app `seechords`, redeploy API, and worker '
-                                    'image. See yt-dlp wiki for PO token if cookies alone fail.'
-                                )
-                            else:
-                                err_msg += (
-                                    ' — Tried player clients: '
-                                    + ', '.join(clients)
-                                    + '. Re-export fresh cookies while logged into YouTube; some videos need '
-                                    'yt-dlp PoToken plugins (see yt-dlp wiki / EJS).'
-                                )
-                        last_dl_exc = RuntimeError(f'Download failed: {err_msg}')
-                        continue  # retry
-
-                    # Get title from yt-dlp if not provided
-                    if not title:
-                        try:
-                            pc = _SUCCESS_YTDLP_PLAYER_CLIENT or 'web'
-                            t_result = subprocess.run(
-                                [ytdlp]
-                                + _ytdlp_cookie_args()
-                                + _ytdlp_browser_headers_args()
-                                + _ytdlp_extractor_args_for_client(pc)
-                                + ['--get-title', '--no-playlist', yt_url],
-                                capture_output=True, text=True, timeout=15,
-                            )
-                            if t_result.returncode == 0 and t_result.stdout.strip():
-                                title = t_result.stdout.strip()
-                            else:
-                                title = video_id
-                        except Exception:
-                            title = video_id
-
-                    print(f'[Worker] Downloaded audio: {os.path.getsize(audio_path)} bytes', flush=True)
-                    _update_job(
-                        job_id,
-                        status='processing',
-                        progress=15,
-                        message='Download done — converting to WAV…',
-                    )
-
-                    hb_state['phase'] = 'ffmpeg'
-                    hb_state['progress'] = 15
-                    # Phase 2: Convert to WAV
-                    subprocess.run(
-                        ['ffmpeg', '-i', audio_path, '-vn', '-ar', '44100', '-ac', '1',
-                         wav_path, '-y'],
-                        capture_output=True, timeout=180,
-                    )
-                    if not os.path.exists(wav_path):
-                        raise RuntimeError('FFmpeg conversion failed')
-
-                    hb_state['phase'] = 'upload'
-                    _upload_wav_cache_to_api(wav_path, video_id)
-                    last_dl_exc = None  # success
-                    break
-                finally:
-                    hb_state['active'] = False
-                    hb_stop.set()
-                    hb_t.join(timeout=3.0)
-
-            if last_dl_exc is not None:
-                raise last_dl_exc
+                hb_state['phase'] = 'upload'
+                _upload_wav_cache_to_api(wav_path, video_id)
+            finally:
+                hb_state['active'] = False
+                hb_stop.set()
+                hb_t.join(timeout=3.0)
 
         # Phase 3: Chord analysis
         _update_job(job_id, status='processing', progress=30, message='Analyzing chords…')
@@ -558,7 +383,7 @@ def main():
         print(f'[Worker] Analysis complete: {len(chords_data)} segments, key={key_val}, bpm={bpm_val}', flush=True)
 
         # Phase 4: Store results in Turso
-        _update_job(job_id, status='processing', progress=90, message='Saving results…')
+        _update_job(job_id, status='processing', progress=95, message='Saving results…')
         version_id = _cache_put(video_id, title, key_val, round(bpm_val, 1), chords_data, beat_times, downbeats)
 
         _update_job(
@@ -573,7 +398,7 @@ def main():
             bpm=round(bpm_val, 1),
             key=key_val,
             beat_times=beat_times,
-            source='btc-v2',
+            source='btc-v2.1',
         )
         print(f'[Worker] Job complete! versionId={version_id}', flush=True)
 
