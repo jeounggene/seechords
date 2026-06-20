@@ -22,6 +22,8 @@ BROWSER="${1:-chrome}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_RAW=$(mktemp /tmp/seechords-cookies-raw.XXXXXX)
 TMP_FILTERED=$(mktemp /tmp/seechords-cookies-filtered.XXXXXX)
+# yt-dlp refuses to overwrite existing non-Netscape files — remove the empty file mktemp created
+rm -f "$TMP_RAW"
 
 cleanup() { rm -f "$TMP_RAW" "$TMP_FILTERED"; }
 trap cleanup EXIT
@@ -35,10 +37,12 @@ for cmd in yt-dlp fly python3; do
 done
 
 echo "==> Exporting cookies from $BROWSER..."
+# yt-dlp may exit non-zero on format/signature errors but still writes the cookie jar —
+# ignore its exit code and verify the file contents afterwards
 yt-dlp --cookies-from-browser "$BROWSER" \
   --cookies "$TMP_RAW" \
   --skip-download \
-  "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>/dev/null
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >/dev/null 2>&1 || true
 
 if [[ ! -s "$TMP_RAW" ]]; then
   echo "Error: cookie export produced an empty file. Is $BROWSER running and logged into YouTube?" >&2

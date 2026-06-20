@@ -305,13 +305,12 @@
     .prog-err { color: #ff6b6b; font-size: 0.85rem; }
 
     /* ── Player Phase ── */
-    #playerPhase { display: none; background: var(--bg); height: 100dvh; overflow: hidden; }
+    #playerPhase { display: none; background: var(--bg); min-height: 100dvh; overflow-y: auto; }
 .player {
   display: flex;
   flex-direction: column;
-  height: 100dvh;
+  min-height: 100dvh;
   background: var(--bg);
-  overflow: hidden;
   position: relative;
 }
 
@@ -453,6 +452,22 @@
   text-align: center;
   white-space: nowrap;
 }
+
+.btn-reanalyze {
+  background: none;
+  border: 1px solid rgba(100,180,255,.25);
+  color: rgba(100,180,255,.5);
+  border-radius: 99px;
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color .15s, background .15s, border-color .15s;
+  flex-shrink: 0;
+}
+.btn-reanalyze:hover { background: rgba(100,180,255,.1); color: #64b4ff; border-color: rgba(100,180,255,.4); }
+.btn-reanalyze:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Timeline ── */
 .timeline-wrap {
@@ -893,52 +908,6 @@
     cursor: pointer;
     touch-action: manipulation;
   }
-  /* ── Chord Sheet (desktop only) ── */
-  .chord-sheet-wrap {
-    max-height: 45vh;
-    overflow-y: auto;
-    padding: 16px 20px;
-    margin-top: 8px;
-    background: rgba(255,255,255,.03);
-    border-radius: 8px;
-    scroll-behavior: smooth;
-  }
-  .chord-sheet-wrap::-webkit-scrollbar { width: 4px; }
-  .chord-sheet-wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 2px; }
-  .cs-line {
-    position: relative;
-    margin-bottom: 4px;
-    font-family: 'Courier New', monospace;
-    white-space: pre;
-    line-height: 1.3;
-  }
-  .cs-chord-line {
-    color: #f0c040;
-    font-size: 0.85em;
-    font-weight: 600;
-    min-height: 1.2em;
-    user-select: text;
-  }
-  .cs-lyric-line {
-    color: rgba(255,255,255,.85);
-    font-size: 0.9em;
-    user-select: text;
-  }
-  .cs-line-group.active .cs-lyric-line {
-    color: #fff;
-  }
-  .cs-line-group.active .cs-chord-line {
-    color: #ffd700;
-  }
-  .cs-no-lyrics {
-    color: rgba(255,255,255,.3);
-    font-style: italic;
-    padding: 12px 0;
-    text-align: center;
-  }
-  @media (orientation: portrait) and (max-width: 900px) {
-    .chord-sheet-wrap { display: none; }
-  }
   /* ── Rotate screen nudge (portrait mobile only) ── */
   /* ── Rotate overlay on chord area (portrait mobile only) ── */
   .rotate-prompt {
@@ -1039,7 +1008,7 @@
       <div class="prog-track"><div class="prog-fill" id="nfProgFill"></div></div>
       <div class="prog-msg" id="nfProgMsg" style="margin-top:6px;">Starting…</div>
       <div style="margin-top:12px; color:var(--muted); font-size:0.82rem; line-height:1.5;">
-        Sorry — analyzing a song for the first time takes about a minute.<br>
+        Sorry — analyzing a song for the first time takes a couple minutes.<br>
         Analysis runs on our servers, so you can background this app and come back. Search for the same song when it's done.
       </div>
     </div>
@@ -1106,151 +1075,10 @@
 
 function _sourceLabel(src) {
   if (src === 'verified') return 'Made by Jin';
-  if (src && src.indexOf('btc-') === 0) return 'Made by SeeChords ' + src.replace('btc-', 'Model ');
-  if (src === 'user-uploaded') return 'Made by SeeChords Model v1';
-  return 'Made by SeeChords';
+  if (src) return 'Made by ' + src;
+  return 'unknown';
 }
 
-// ── Lyrics fetching (LRCLIB) ───────────────────────────────
-let syncedLyrics = null; // [{time: float, text: string}, ...] or null
-
-async function fetchLyrics(title) {
-  syncedLyrics = null;
-  const el = document.getElementById('chordSheetWrap');
-  if (!el) return; // mobile — no sheet
-
-  // Clean title: remove "(Official Video)", "[Official Audio]", etc.
-  const clean = title
-    .replace(/\s*[\(\[](official|lyric|music|audio|visualizer|live|hd|hq|4k|video|mv)[\s\w]*[\)\]]/gi, '')
-    .replace(/\s*\|.*$/, '')
-    .trim();
-
-  // Try to split into artist - title
-  let artist = '', track = clean;
-  const dash = clean.match(/^(.+?)\s*[-–—]\s*(.+)$/);
-  if (dash) { artist = dash[1].trim(); track = dash[2].trim(); }
-
-  const params = new URLSearchParams({ track_name: track });
-  if (artist) params.set('artist_name', artist);
-
-  try {
-    const res = await fetch('https://lrclib.net/api/search?' + params.toString());
-    if (!res.ok) { _showNoLyrics(); return; }
-    const results = await res.json();
-    // Find first result with synced lyrics
-    const match = results.find(r => r.syncedLyrics);
-    if (!match) { _showNoLyrics(); return; }
-
-    // Parse LRC format: [mm:ss.xx] text
-    syncedLyrics = [];
-    for (const line of match.syncedLyrics.split('\n')) {
-      const m = line.match(/^\[(\d+):(\d+\.\d+)\]\s*(.*)$/);
-      if (m) {
-        const time = parseInt(m[1]) * 60 + parseFloat(m[2]);
-        syncedLyrics.push({ time, text: m[3] });
-      }
-    }
-    if (!syncedLyrics.length) { syncedLyrics = null; _showNoLyrics(); return; }
-    renderChordSheet();
-  } catch (e) {
-    console.warn('[SeeChords] Lyrics fetch failed:', e);
-    _showNoLyrics();
-  }
-}
-
-function _showNoLyrics() {
-  const el = document.getElementById('chordSheetWrap');
-  if (el) el.innerHTML = '<div class="cs-no-lyrics">No lyrics available for this song</div>';
-}
-
-function renderChordSheet() {
-  const el = document.getElementById('chordSheetWrap');
-  if (!el || !syncedLyrics) return;
-
-  if (!beatChords.length || !beatTimes.length) {
-    el.innerHTML = '<div class="cs-no-lyrics">No chord timing data available</div>';
-    return;
-  }
-
-  const lines = syncedLyrics.filter(l => l.text.trim() !== '');
-  if (!lines.length) { _showNoLyrics(); return; }
-
-  let html = '';
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
-    const nextTime = li + 1 < lines.length ? lines[li + 1].time : Infinity;
-    const lyricText = line.text;
-    if (!lyricText) continue;
-
-    // Find all chord changes within this lyric line's time range
-    const lineChords = [];
-    for (const bc of beatChords) {
-      const chordTime = beatTimes[bc.beatStart] ?? 0;
-      if (chordTime >= line.time && chordTime < nextTime) {
-        const ch = (bc.chord === 'N') ? '' : transposeChord(bc.chord, transposeSteps);
-        if (ch) lineChords.push({ chord: ch, time: chordTime });
-      }
-    }
-
-    // Position chords above lyrics by mapping chord time to character position
-    const lineDuration = nextTime - line.time;
-    let chordStr = '';
-    if (lineChords.length > 0) {
-      const chars = new Array(Math.max(lyricText.length, 1)).fill(' ');
-      for (const lc of lineChords) {
-        const frac = lineDuration > 0 ? (lc.time - line.time) / lineDuration : 0;
-        let pos = Math.round(frac * (lyricText.length - 1));
-        pos = Math.max(0, Math.min(lyricText.length - 1, pos));
-        const chordName = lc.chord;
-        for (let ci = 0; ci < chordName.length; ci++) {
-          const idx = pos + ci;
-          if (idx < chars.length) chars[idx] = chordName[ci];
-          else chars.push(chordName[ci]);
-        }
-      }
-      chordStr = chars.join('');
-    }
-
-    html += '<div class="cs-line-group" data-time="' + line.time + '">';
-    if (chordStr.trim()) {
-      html += '<div class="cs-line cs-chord-line">' + _escSheet(chordStr) + '</div>';
-    }
-    html += '<div class="cs-line cs-lyric-line">' + _escSheet(lyricText) + '</div>';
-    html += '</div>';
-  }
-
-  el.innerHTML = html || '<div class="cs-no-lyrics">No lyrics available</div>';
-}
-
-function _escSheet(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-let _csActiveLine = null;
-
-function updateChordSheetHighlight(currentTime) {
-  const wrap = document.getElementById('chordSheetWrap');
-  if (!wrap || !syncedLyrics) return;
-
-  const groups = wrap.querySelectorAll('.cs-line-group');
-  let activeGroup = null;
-  for (let i = groups.length - 1; i >= 0; i--) {
-    const t = parseFloat(groups[i].dataset.time);
-    if (currentTime >= t) { activeGroup = groups[i]; break; }
-  }
-
-  if (activeGroup && activeGroup !== _csActiveLine) {
-    if (_csActiveLine) _csActiveLine.classList.remove('active');
-    activeGroup.classList.add('active');
-    _csActiveLine = activeGroup;
-
-    // Auto-scroll: keep active line in the upper third of the panel
-    const wrapRect = wrap.getBoundingClientRect();
-    const lineRect = activeGroup.getBoundingClientRect();
-    const offset = lineRect.top - wrapRect.top - wrapRect.height * 0.3;
-    wrap.scrollTop += offset;
-  }
-}
 
 let currentVideoId  = null;
 let chords          = [];
@@ -1379,7 +1207,7 @@ const CHORD_DIAGRAMS = {
   'Bbsus4': { f:[-1,1,3,3,4,1],  b:1 },
   'Bsus4':  { f:[-1,2,4,4,0,0],  b:1 },
 
-  // ── BTC 170-class families: 6, m6, mM7, dim7 (12 roots × 4) ──
+  // ── ChordMini BTC 170-class families: 6, m6, mM7, dim7 (12 roots × 4) ──
   'C6': { f:[-1,3,2,2,1,0], b:1 },
   'Cm6': { f:[-1,3,1,2,1,3], b:1 },
   'CmM7': { f:[-1,1,3,2,3,-1], b:3 },
@@ -1796,12 +1624,13 @@ function buildPlayerHTML(title) {
       <div class="player-meta-bar">
         <span class="badge badge-key" id="keyBadge">Key: —</span>
         <span class="badge badge-bpm" id="bpmBadge">BPM: —</span>
-        <select class="badge" id="versionSelect" style="display:none;border-color:rgba(255,255,255,.15);color:rgba(255,255,255,.45);font-size:.85rem;padding:4px 12px;border-radius:99px;border:1px solid;background:transparent;cursor:pointer;outline:none;-webkit-appearance:none;appearance:none;"></select>
         <div class="transpose-ctrl">
           <button class="ctrl-btn" id="transpDown" aria-label="Transpose down" type="button">▼</button>
           <span class="ctrl-label" id="transpLabel">Original</span>
           <button class="ctrl-btn" id="transpUp" aria-label="Transpose up" type="button">▲</button>
         </div>
+        <select class="badge" id="versionSelect" style="display:none;border-color:rgba(255,255,255,.15);color:rgba(255,255,255,.45);font-size:.85rem;padding:4px 12px;border-radius:99px;border:1px solid;background:transparent;cursor:pointer;outline:none;-webkit-appearance:none;appearance:none;"></select>
+        <button class="btn-reanalyze" id="reanalyzeBtn" type="button" title="Re-analyze chords">↻ Re-analyze</button>
       </div>
       <div class="timeline-wrap" id="timelineWrap">
         <div class="tl-row" id="tlRow"></div>
@@ -1837,7 +1666,6 @@ function buildPlayerHTML(title) {
         </div>
         <span class="audio-loading" id="audioLoading">Loading…</span>
       </div>
-      ${!/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? '<div class="chord-sheet-wrap" id="chordSheetWrap"><div class="cs-no-lyrics">Loading lyrics…</div></div>' : ''}
       ${/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && !window.navigator.standalone && !window.matchMedia('(display-mode: standalone)').matches ? '<div class="a2hs-prompt" id="a2hsPrompt"><span class="a2hs-prompt-icon">📲</span><span class="a2hs-prompt-text"><strong>Add to Home Screen</strong>Tap Share → "Add to Home Screen"<br>for a fullscreen experience with no browser bar</span><button class="a2hs-prompt-btn" id="a2hsDismiss">Got it</button></div>' : ''}
     </div>
   `;
@@ -2153,8 +1981,6 @@ function startTracking() {
       }
       if (bi !== currentBeatIdx) goToBeat(bi);
     }
-    // Sync chord sheet highlight
-    updateChordSheetHighlight(cur);
     rafId = requestAnimationFrame(tick);
   }
   rafId = requestAnimationFrame(tick);
@@ -2235,11 +2061,6 @@ function initPlayer(data) {
   document.getElementById('keyBadge').textContent = `Key: ${baseKey || '—'}`;
   document.getElementById('bpmBadge').textContent = `BPM: ${Math.round(bpm)}`;
 
-  syncedLyrics = null;
-  _csActiveLine = null;
-  // Fetch lyrics for chord sheet (desktop only)
-  fetchLyrics(title);
-
   // Version selector — fetch all versions for this video
   var vsel = document.getElementById('versionSelect');
   if (vsel && currentVideoId) {
@@ -2278,6 +2099,45 @@ function initPlayer(data) {
   document.getElementById('transpUp').addEventListener('click', () => {
     transposeSteps = Math.min(11, transposeSteps + 1);
     refreshDisplay();
+  });
+
+  // Re-analyze button
+  document.getElementById('reanalyzeBtn').addEventListener('click', async () => {
+    if (!currentVideoId) return;
+    if (!confirm('Re-analyze this song? This will re-run chord detection.')) return;
+    const btn = document.getElementById('reanalyzeBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Analyzing…';
+    try {
+      const res = await fetch('/api/ingest/reanalyze/' + currentVideoId, { method: 'POST' });
+      if (res.status === 401) { btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert('Auth required — log in via ingest page first.'); return; }
+      if (res.status === 429) { const d = await res.json(); btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert(d.error || 'Worker busy'); return; }
+      const data = await res.json();
+      if (!res.ok) { btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert(data.error || 'Failed'); return; }
+      const jobId = data.jobId;
+      // Poll job status
+      const poll = setInterval(async () => {
+        try {
+          const sr = await fetch('/api/status/' + jobId);
+          const sd = await sr.json();
+          btn.textContent = '⏳ ' + (sd.message || 'Analyzing…').slice(0, 30);
+          if (sd.status === 'done') {
+            clearInterval(poll);
+            btn.textContent = '✓ Done';
+            setTimeout(() => { loadChords('https://www.youtube.com/watch?v=' + currentVideoId); }, 1000);
+          } else if (sd.status === 'error') {
+            clearInterval(poll);
+            btn.textContent = '↻ Re-analyze';
+            btn.disabled = false;
+            alert('Analysis failed: ' + (sd.message || 'Unknown error'));
+          }
+        } catch (e) { /* keep polling */ }
+      }, 3000);
+    } catch (e) {
+      btn.textContent = '↻ Re-analyze';
+      btn.disabled = false;
+      alert('Error: ' + e.message);
+    }
   });
 
   // Back button
@@ -2532,8 +2392,6 @@ function refreshDisplay() {
 
   if (currentChordIdx >= 0) setCardContent(currentChordIdx);
 
-  // Re-render chord sheet with new transposition
-  renderChordSheet();
 }
 
 </script>

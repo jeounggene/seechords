@@ -52,6 +52,9 @@
   .review-table tr.mismatch { background: rgba(233,69,96,0.08); }
   .btn-delete-version { background: none; border: 1px solid rgba(255,80,80,.3); color: rgba(255,80,80,.6); border-radius: 4px; cursor: pointer; padding: 2px 6px; font-size: 0.8em; }
   .btn-delete-version:hover { background: rgba(255,80,80,.15); color: #f55; }
+  .btn-reanalyze-version { background: none; border: 1px solid rgba(100,180,255,.3); color: rgba(100,180,255,.6); border-radius: 4px; cursor: pointer; padding: 2px 6px; font-size: 0.8em; }
+  .btn-reanalyze-version:hover { background: rgba(100,180,255,.15); color: #64b4ff; }
+  .btn-reanalyze-version:disabled { opacity: 0.5; cursor: not-allowed; }
   .review-table tr.playing { background: rgba(78,204,163,0.15); }
   .match-yes { color: var(--ok); }
   .match-no { color: var(--hi); }
@@ -336,6 +339,21 @@
     </button>
   </form>
 </div>
+{% elif show_mfa %}
+<div style="max-width:400px;margin:120px auto;padding:0 20px;">
+  <h1 style="font-size:1.6em;margin-bottom:24px;color:#e94560;text-align:center;">SeeChords Ingest</h1>
+  <form method="POST" action="/ingest/login" style="background:#16213e;padding:32px;border-radius:12px;">
+    {% if login_error %}
+    <div style="color:#e94560;font-size:0.9em;margin-bottom:12px;">{{ login_error }}</div>
+    {% endif %}
+    <label style="display:block;margin-bottom:6px;font-size:0.9em;color:#888;">Authenticator Code</label>
+    <input type="text" name="totp_code" autofocus autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}"
+           style="width:100%;padding:10px;margin-bottom:16px;background:#0f3460;border:1px solid #333;border-radius:4px;color:#eee;font-family:inherit;font-size:1.4em;text-align:center;letter-spacing:0.3em;">
+    <button type="submit" style="width:100%;padding:12px;background:#e94560;color:#fff;border:none;border-radius:4px;font-family:inherit;font-size:0.95em;font-weight:600;cursor:pointer;">
+      Verify
+    </button>
+  </form>
+</div>
 {% else %}
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -358,6 +376,12 @@
   <div class="upload-area" style="margin-top:12px;">
     <h2>Saved Versions</h2>
     <div id="versions-list" style="font-size:0.85em;">Loading...</div>
+  </div>
+
+  <div class="upload-area" style="margin-top:12px;">
+    <h2>All Songs</h2>
+    <input type="text" id="all-songs-filter" placeholder="Filter by title..." oninput="filterAllSongs()" style="width:100%;margin-bottom:8px;padding:6px 10px;background:#0f3460;border:1px solid #333;border-radius:4px;color:#eee;font-family:inherit;font-size:0.85em;">
+    <div id="all-songs-list" style="font-size:0.85em;max-height:400px;overflow-y:auto;">Loading...</div>
   </div>
 </div>
 
@@ -488,7 +512,6 @@ let audioObjectURL = null;
 let currentAlignMode = 'beat';
 let _currentIngestVideoId = null;
 let _currentSongName = '';
-let currentTranscript = [];
 
 // ── YouTube IFrame Player ──
 let ytPlayer = null;
@@ -551,7 +574,76 @@ function initYTPlayerForVideo(videoId) {
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadVersionsList);
+document.addEventListener('DOMContentLoaded', () => { loadVersionsList(); loadAllSongs(); });
+
+// ── Admin stats ──
+async function loadAdminStats() {
+  const el = document.getElementById('admin-stats');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/ingest/stats');
+    const s = await res.json();
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;">
+        <div><strong>${s.total_songs}</strong> songs</div>
+        <div><strong>${s.total_versions}</strong> versions</div>
+        <div><strong>${s.verified}</strong> verified</div>
+        <div><strong>${s.model}</strong> by ${s.model_name || s.model_source}</div>
+        <div><strong>${s.missing_downbeats}</strong> missing downbeats</div>
+      </div>`;
+  } catch (e) { el.textContent = 'Failed to load stats'; }
+}
+
+async function reanalyzeAll() {
+  if (!confirm('Re-analyze all songs one at a time?')) return;
+  const btn = document.getElementById('btn-reanalyze-all');
+  const status = document.getElementById('reanalyze-status');
+  btn.disabled = true;
+  let done = 0;
+  try {
+    while (true) {
+      btn.textContent = `Re-analyzing (${done} done)...`;
+      const res = await fetch('/api/ingest/reanalyze-next', { method: 'POST' });
+      if (res.status === 429) { status.textContent = 'Worker busy, waiting...'; await new Promise(r => setTimeout(r, 15000)); continue; }
+      if (!res.ok) { status.textContent = 'Error: ' + res.status; break; }
+      const data = await res.json();
+      if (!data.queued) { status.textContent = `All done! ${done} songs processed.`; break; }
+      status.textContent = `Processing: ${data.title || data.videoId} (${data.remaining} left)`;
+      // Poll job status until done
+      while (true) {
+        await new Promise(r => setTimeout(r, 10000));
+        const jr = await fetch('/api/job/' + data.jobId);
+        if (!jr.ok) continue;
+        const job = await jr.json();
+        status.textContent = `${data.title || data.videoId}: ${job.message || job.status} (${data.remaining} left)`;
+        if (job.status === 'done' || job.status === 'error') break;
+      }
+      done++;
+    }
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
+  btn.disabled = false;
+  btn.textContent = 'Re-analyze All Songs';
+}
+
+function showChangePassword() {
+  const form = document.getElementById('change-pw-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function changePassword() {
+  const pw = document.getElementById('new-password').value;
+  const confirm = document.getElementById('confirm-password').value;
+  const status = document.getElementById('pw-status');
+  if (!pw) { status.textContent = 'Enter a password.'; status.style.color = '#e94560'; return; }
+  if (pw !== confirm) { status.textContent = 'Passwords do not match.'; status.style.color = '#e94560'; return; }
+  if (pw.length < 8) { status.textContent = 'Minimum 8 characters.'; status.style.color = '#e94560'; return; }
+  try {
+    const res = await fetch('/api/ingest/change-password', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: pw}) });
+    const data = await res.json();
+    if (res.ok) { status.textContent = 'Password updated.'; status.style.color = '#4ade80'; document.getElementById('new-password').value = ''; document.getElementById('confirm-password').value = ''; }
+    else { status.textContent = data.error || 'Failed'; status.style.color = '#e94560'; }
+  } catch (e) { status.textContent = 'Error: ' + e.message; status.style.color = '#e94560'; }
+}
 
 // ── Home view: versions list ──
 async function loadVersionsList() {
@@ -569,7 +661,7 @@ async function loadVersionsList() {
     el.innerHTML = '';
     const table = document.createElement('table');
     table.className = 'review-table';
-    table.innerHTML = '<thead><tr><th>Title</th><th>Key</th><th>BPM</th><th>Source</th><th>Chords</th><th>Date</th><th></th></tr></thead>';
+    table.innerHTML = '<thead><tr><th>Title</th><th>Key</th><th>BPM</th><th>Source</th><th>Date</th><th></th></tr></thead>';
     const tbody = document.createElement('tbody');
     for (const v of versions) {
       const tr = document.createElement('tr');
@@ -577,13 +669,103 @@ async function loadVersionsList() {
       tr.onclick = () => loadSavedVersion(v.versionId, v.videoId);
       const sourceLabel = v.source === 'verified' ? 'Made by Jin' : 'Draft';
       const date = new Date(v.analyzedAt * 1000).toLocaleDateString();
-      tr.innerHTML = '<td>' + (v.title || '\u2014') + '</td><td>' + (v.key || '\u2014') + '</td><td>' + (v.bpm || '\u2014') + '</td><td>' + sourceLabel + '</td><td>' + v.segmentCount + '</td><td>' + date + '</td><td><button class="btn-delete-version" data-vid="' + v.versionId + '" onclick="event.stopPropagation(); deleteVersion(' + v.versionId + ')">✕</button></td>';
+      tr.innerHTML = '<td>' + (v.title || '\u2014') + '</td><td>' + (v.key || '\u2014') + '</td><td>' + (v.bpm || '\u2014') + '</td><td>' + sourceLabel + '</td><td>' + date + '</td><td><button class="btn-delete-version" data-vid="' + v.versionId + '" onclick="event.stopPropagation(); deleteVersion(' + v.versionId + ')">✕</button></td>';
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
     el.appendChild(table);
   } catch (e) {
     el.textContent = 'Error loading versions.';
+  }
+}
+
+var _allSongsData = [];
+
+async function loadAllSongs() {
+  const el = document.getElementById('all-songs-list');
+  if (!el) return;
+  try {
+    const resp = await fetch(API + '/api/ingest/all-songs');
+    if (resp.status === 401) { location.reload(); return; }
+    const data = await resp.json();
+    _allSongsData = (data.songs || []).sort((a, b) => {
+      const aMissing = (!a.hasChords || !a.hasBeats) ? 0 : 1;
+      const bMissing = (!b.hasChords || !b.hasBeats) ? 0 : 1;
+      return aMissing - bMissing;
+    });
+    renderAllSongs(_allSongsData);
+  } catch (e) { el.textContent = 'Error loading songs.'; }
+}
+
+function filterAllSongs() {
+  const q = (document.getElementById('all-songs-filter').value || '').toLowerCase();
+  const filtered = q ? _allSongsData.filter(s => (s.title || '').toLowerCase().includes(q)) : _allSongsData;
+  renderAllSongs(filtered);
+}
+
+function renderAllSongs(songs) {
+  const el = document.getElementById('all-songs-list');
+  if (!songs.length) { el.innerHTML = '<div style="color:#888;padding:8px;">No songs found.</div>'; return; }
+  const table = document.createElement('table');
+  table.className = 'review-table';
+  table.innerHTML = '<thead><tr><th>Title</th><th>Video ID</th><th>Key</th><th>BPM</th><th>Source</th><th>Status</th><th></th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  for (const s of songs) {
+    const tr = document.createElement('tr');
+    const missing = !s.hasChords || !s.hasBeats;
+    const statusLabel = missing ? '<span style="color:#e94560;">Missing data</span>' : '<span style="color:#4ade80;">OK</span>';
+    if (missing) tr.style.background = 'rgba(233,69,96,0.15)';
+    tr.innerHTML = '<td>' + (s.title || '\u2014') + '</td><td style="font-size:0.8em;font-family:monospace;">' + s.videoId + '</td><td>' + (s.key || '\u2014') + '</td><td>' + (s.bpm || '\u2014') + '</td><td>' + (s.source || '\u2014') + '</td><td>' + statusLabel + '</td><td>'
+      + '<button class="btn-reanalyze-version" title="Re-analyze" onclick="reanalyzeSong(\'' + s.videoId + '\', this)" style="margin-right:4px;">↻</button>'
+      + '<button class="btn-delete-version" title="Delete song" onclick="deleteSong(\'' + s.videoId + '\', \'' + (s.title || '').replace(/'/g, "\\'") + '\')">✕</button></td>';
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  el.innerHTML = '';
+  el.appendChild(table);
+}
+
+async function deleteSong(videoId, title) {
+  if (!confirm('Delete ALL versions of "' + title + '"? This cannot be undone.')) return;
+  try {
+    const res = await fetch(API + '/api/ingest/song/' + videoId, { method: 'DELETE' });
+    if (res.status === 401) { location.reload(); return; }
+    const data = await res.json();
+    if (res.ok && data.deleted) {
+      loadAllSongs();
+      loadVersionsList();
+    } else {
+      alert('Delete failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) { alert('Delete error: ' + e.message); }
+}
+
+async function reanalyzeSong(videoId, btn) {
+  if (!confirm('Re-analyze this song? This will override existing chord data.')) return;
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '...';
+  try {
+    const res = await fetch(API + '/api/ingest/reanalyze/' + videoId, { method: 'POST' });
+    if (res.status === 401) { location.reload(); return; }
+    if (res.status === 429) { const d = await res.json(); alert(d.error || 'Worker busy'); btn.disabled = false; btn.textContent = origText; return; }
+    const data = await res.json();
+    if (!res.ok) { alert(data.error || 'Failed'); btn.disabled = false; btn.textContent = origText; return; }
+    btn.textContent = '⏳';
+    // Poll job until done
+    const jobId = data.jobId;
+    while (true) {
+      await new Promise(r => setTimeout(r, 8000));
+      const jr = await fetch(API + '/api/status/' + jobId);
+      if (!jr.ok) continue;
+      const job = await jr.json();
+      if (job.status === 'done') { btn.textContent = '✓'; btn.style.color = '#4ade80'; loadAllSongs(); break; }
+      if (job.status === 'error') { btn.textContent = '✕'; btn.style.color = '#e94560'; alert('Analysis failed: ' + (job.message || 'unknown error')); break; }
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = origText;
   }
 }
 
@@ -807,7 +989,6 @@ function showReview(data) {
   if (uploadLabBadge2) uploadLabBadge2.style.display = '';
 
   currentAlignMode = data.alignMode || 'beat';
-  currentTranscript = data.transcript || [];
 
   // Info bar
   const info = document.getElementById('info-bar');
@@ -1369,34 +1550,6 @@ function paUpdate() {
   document.getElementById('pa-progress-fill').style.width =
     (t / totalDur * 100).toFixed(2) + '%';
 
-  // ── Lyric line (lyric mode only) ──
-  const lyricLine = document.getElementById('pa-lyric-line');
-  if (lyricLine) {
-    if (currentAlignMode === 'lyric' && currentTranscript.length) {
-      lyricLine.style.display = '';
-      let wordIdx = -1;
-      for (let i = 0; i < currentTranscript.length; i++) {
-        if (t >= currentTranscript[i].start && t < currentTranscript[i].end) {
-          wordIdx = i; break;
-        }
-      }
-      const WINDOW = 8;
-      const center = wordIdx >= 0 ? wordIdx : 0;
-      const wStart = Math.max(0, center - WINDOW);
-      const wEnd = Math.min(currentTranscript.length, center + WINDOW + 1);
-      lyricLine.innerHTML = '';
-      for (let i = wStart; i < wEnd; i++) {
-        const span = document.createElement('span');
-        span.className = 'pa-lyric-word';
-        if (i === wordIdx) span.classList.add('pa-word-active');
-        else if (i < wordIdx) span.classList.add('pa-word-past');
-        span.textContent = currentTranscript[i].word + ' ';
-        lyricLine.appendChild(span);
-      }
-    } else {
-      lyricLine.style.display = 'none';
-    }
-  }
 
   // ── Play button state ──
   const _paused = (ytPlayer && _currentIngestVideoId) ? !_isYTPlaying() : (player ? player.paused : true);

@@ -27,7 +27,6 @@ import subprocess
 from functools import wraps
 from flask import Flask, request, jsonify, send_file, render_template, redirect, Response, stream_with_context, session
 from flask_cors import CORS
-import numpy as np
 try:
     import libsql_experimental as libsql
 except ImportError:
@@ -44,10 +43,32 @@ except ImportError:
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*", "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-me')
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 INGEST_PASSWORD = os.environ.get('INGEST_PASSWORD', '')
+MFA_TOTP_SECRET = os.environ.get('MFA_TOTP_SECRET', '')
 
-# Current analysis model version — used as source tag for chord_versions
-CURRENT_MODEL_SOURCE = 'btc-v2'
+
+def _check_ingest_password(password):
+    """Check password against env var first (fast), then DB hash."""
+    if password == INGEST_PASSWORD:
+        return True
+    import hashlib
+    try:
+        con = _get_db()
+        row = con.execute("SELECT value FROM settings WHERE key = 'ingest_password_hash'").fetchone()
+        con.close()
+        if row:
+            return hashlib.sha256(password.encode()).hexdigest() == row[0]
+    except Exception:
+        pass
+    return False
+
+# Current analysis model — ChordMini's BTC model (ptnghia-j/ChordMini, MIT). See CREDITS.md.
+# CURRENT_MODEL_SOURCE is the version tag stored in chord_versions.source.
+CURRENT_MODEL_SOURCE = 'chordmini-btc-v2.1'
+CURRENT_MODEL_DISPLAY = 'ChordMini BTC (Phan et al., 2026)'
 
 # In-memory cache for resolved YouTube stream URLs (TTL 5h, evicted per-request)
 _yt_stream_cache = {}   # video_id -> {'url': str, 'content_type': str, 'expires': float}
@@ -80,28 +101,9 @@ def _wav_cache_auth_ok() -> bool:
     if not secret:
         return False
     auth = request.headers.get('Authorization', '')
-    return auth == f'Bearer {secret}'
+    import hmac
+    return hmac.compare_digest(auth, f'Bearer {secret}')
 
-
-def _worker_youtube_cookie_env():
-    """Env keys to pass to ephemeral Fly workers so yt-dlp can use cookies.
-
-    Worker VMs do not share the API's filesystem: YTDLP_COOKIEFILE paths on the API
-    are useless there unless we embed file bytes. Prefer YTDLP_COOKIES_B64 on the API
-    (Fly secret), or a readable YTDLP_COOKIEFILE on the API which we re-encode here.
-    """
-    b64 = _normalize_ytdlp_cookies_b64(os.environ.get('YTDLP_COOKIES_B64') or '')
-    if b64:
-        return {'YTDLP_COOKIES_B64': b64}
-    cf = _ytdlp_cookiefile()
-    if cf:
-        try:
-            with open(cf, 'rb') as f:
-                data = f.read()
-            return {'YTDLP_COOKIES_B64': base64.b64encode(data).decode('ascii')}
-        except OSError as e:
-            print(f'[SeeChords] Cannot read YTDLP_COOKIEFILE {cf}: {e}', flush=True)
-    return {}
 
 
 # ─────────────────────────────────────────────
@@ -142,6 +144,17 @@ def _init_db():
         con.commit()
     except Exception:
         pass  # column already exists
+    # Migration: add transcript column if missing
+    try:
+        con.execute('ALTER TABLE chord_versions ADD COLUMN transcript TEXT')
+        con.commit()
+    except Exception:
+        pass  # column already exists
+    # Migration: rename btc-v2 → btc-v2.0
+    con.execute("UPDATE chord_versions SET source = 'btc-v2.0' WHERE source = 'btc-v2'")
+    # Migration: credit ChordMini — btc-v2.x → chordmini-btc-v2.x (our model is ChordMini's BTC).
+    con.execute("UPDATE chord_versions SET source = 'chordmini-' || source WHERE source LIKE 'btc-v2%'")
+    con.commit()
     con.execute('''
         CREATE TABLE IF NOT EXISTS jobs (
             job_id     TEXT PRIMARY KEY,
@@ -164,6 +177,12 @@ def _init_db():
             created_at INTEGER NOT NULL
         )
     ''')
+    con.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    ''')
     con.commit()
     con.close()
 
@@ -172,6 +191,7 @@ _init_db()
 
 _CV_COLS = ['version_id', 'video_id', 'title', 'key', 'bpm',
             'chords', 'beat_times', 'downbeats', 'source', 'analyzed_at', 'is_active']
+_CV_SELECT = ', '.join(_CV_COLS)
 
 
 def _row_to_dict(row, cols):
@@ -179,6 +199,27 @@ def _row_to_dict(row, cols):
     if isinstance(row, dict):
         return row
     return dict(zip(cols, row))
+
+
+def _safe_json_loads_list(v):
+    """Parse a JSON list value; return [] for NULL/empty/malformed."""
+    if v is None or v == '' or v == b'':
+        return []
+    if isinstance(v, (list, tuple)):
+        return list(v)
+    if isinstance(v, bytes):
+        try: v = v.decode('utf-8')
+        except Exception: return []
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return []
+        try:
+            parsed = json.loads(s)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
 
 
 def _version_row_to_dict(row):
@@ -191,7 +232,7 @@ def _version_row_to_dict(row):
         'bpm':        d['bpm'],
         'chords':     json.loads(d['chords']) if isinstance(d['chords'], str) else d['chords'],
         'beat_times': json.loads(d['beat_times']) if isinstance(d['beat_times'], str) else d['beat_times'],
-        'downbeats':  json.loads(d['downbeats']) if d.get('downbeats') and isinstance(d['downbeats'], str) else (d.get('downbeats') or []),
+        'downbeats':  _safe_json_loads_list(d.get('downbeats')),
         'source':     d['source'],
         'analyzedAt': d['analyzed_at'],
         'isActive':   bool(d['is_active']),
@@ -327,7 +368,7 @@ def _cache_get(video_id: str):
     """Return the best version for a video: verified > current model > legacy. Excludes drafts."""
     con = _get_db()
     row = con.execute(
-        '''SELECT * FROM chord_versions
+        f'''SELECT {_CV_SELECT} FROM chord_versions
            WHERE video_id = ? AND source != 'ingest-edit'
            ORDER BY
              (source = 'verified') DESC,
@@ -355,7 +396,7 @@ def _has_verified_version(video_id: str) -> bool:
 
 def _cache_put(video_id, title, key, bpm, chords_data, beat_times, downbeats=None):
     con = _get_db()
-    con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = ?", (video_id, CURRENT_MODEL_SOURCE))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, downbeats, source, analyzed_at, is_active)
@@ -434,193 +475,11 @@ def _get_job(job_id):
 # Chord detection (reused from ezchords)
 # ─────────────────────────────────────────────
 
-NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B']
-
-SIMPLE_INTERVALS = [
-    ('',  [0, 4, 7]),
-    ('m', [0, 3, 7]),
-]
-
-EXTENDED_INTERVALS = [
-    ('7',    [0, 4, 7, 10]),
-    ('m7',   [0, 3, 7, 10]),
-    ('maj7', [0, 4, 7, 11]),
-    ('sus2', [0, 2, 7]),
-    ('sus4', [0, 5, 7]),
-    ('dim',  [0, 3, 6]),
-    ('aug',  [0, 4, 8]),
-]
-
-ALL_INTERVALS = SIMPLE_INTERVALS + EXTENDED_INTERVALS
-
-ROOT_WEIGHT  = 1.5
-FIFTH_WEIGHT = 1.2
-
-
-def _build_templates(intervals_list):
-    templates = {}
-    for i, note in enumerate(NOTES):
-        for chord_type, intervals in intervals_list:
-            t = np.zeros(12)
-            for k, iv in enumerate(intervals):
-                if k == 0:
-                    w = ROOT_WEIGHT
-                elif iv in (7, 6, 8):
-                    w = FIFTH_WEIGHT
-                else:
-                    w = 1.0
-                t[(i + iv) % 12] = w
-            t /= np.linalg.norm(t)
-            templates[note + chord_type] = t
-    return templates
-
-
-SIMPLE_TEMPLATES = _build_templates(SIMPLE_INTERVALS)
-SIMPLE_CHORDS    = list(SIMPLE_TEMPLATES.keys())
-SIMPLE_MATRIX    = np.array([SIMPLE_TEMPLATES[c] for c in SIMPLE_CHORDS])
-
-CHORD_TEMPLATES  = _build_templates(ALL_INTERVALS)
-ALL_CHORDS       = list(CHORD_TEMPLATES.keys())
-TEMPLATE_MATRIX  = np.array([CHORD_TEMPLATES[c] for c in ALL_CHORDS])
-
-_EXTENDED_TO_SIMPLE = {}
-for i, note in enumerate(NOTES):
-    for suffix, _ in EXTENDED_INTERVALS:
-        parent = note + ('m' if 'm' in suffix and suffix != 'maj7' else '')
-        _EXTENDED_TO_SIMPLE[note + suffix] = parent
-
-_DIATONIC_INTERVALS = [0, 2, 4, 5, 7, 9, 11]
-_DIATONIC_QUALITIES = ['', 'm', 'm', '', '', 'm', 'dim']
-
-
-def _diatonic_set(key_idx):
-    s = set()
-    for offset, quality in zip(_DIATONIC_INTERVALS, _DIATONIC_QUALITIES):
-        note = NOTES[(key_idx + offset) % 12]
-        s.add(note + quality)
-    return s
-
-
-def _viterbi_decode(template_matrix, chord_list, beat_chroma, self_prob=0.92,
-                    emission_bias=None):
-    n_chords = len(chord_list)
-    n_beats  = beat_chroma.shape[1]
-
-    norms = np.linalg.norm(beat_chroma, axis=0, keepdims=True)
-    norms[norms == 0] = 1.0
-    sim = template_matrix @ (beat_chroma / norms)
-
-    log_emit = np.log(np.clip(sim, 1e-10, None))
-    if emission_bias is not None:
-        log_emit += emission_bias
-
-    switch_prob = (1.0 - self_prob) / max(n_chords - 1, 1)
-    log_self   = np.log(self_prob)
-    log_switch = np.log(switch_prob)
-
-    viterbi = np.full((n_chords, n_beats), -np.inf)
-    backptr = np.zeros((n_chords, n_beats), dtype=int)
-    viterbi[:, 0] = np.log(1.0 / n_chords) + log_emit[:, 0]
-
-    for t in range(1, n_beats):
-        prev = viterbi[:, t - 1]
-        for s in range(n_chords):
-            candidates = prev + log_switch
-            candidates[s] = prev[s] + log_self
-            bp = int(np.argmax(candidates))
-            viterbi[s, t] = candidates[bp] + log_emit[s, t]
-            backptr[s, t] = bp
-
-    path = np.zeros(n_beats, dtype=int)
-    path[-1] = int(np.argmax(viterbi[:, -1]))
-    for t in range(n_beats - 2, -1, -1):
-        path[t] = backptr[path[t + 1], t + 1]
-
-    return [chord_list[ci] for ci in path]
-
-
 def detect_chords(audio_path: str, hop_size: float = 0.5):
-    """Run chord analysis in-process (avoids OOM from subprocess doubling memory)."""
-    try:
-        from analyze_chords import analyze as _analyze_chords
-        data = _analyze_chords(audio_path)
-        return data['chords'], data['bpm'], data['key'], data['beat_times'], data.get('downbeats')
-    except Exception as e:
-        print(f'[SeeChords] analyze_chords failed, falling back to librosa: {e}')
-        import traceback; traceback.print_exc()
-
-    chords, bpm, key, beat_times = _detect_chords_librosa(audio_path, hop_size)
-    return chords, bpm, key, beat_times, None
-
-
-def _detect_chords_librosa(audio_path: str, hop_size: float = 0.5):
-    import librosa
-    y, sr = librosa.load(audio_path, mono=True, sr=22050, duration=360)
-    hop_length = 2048
-
-    y_harm, y_perc = librosa.effects.hpss(y)
-
-    chroma = librosa.feature.chroma_cens(
-        y=y_harm, sr=sr, hop_length=hop_length, n_chroma=12,
-    )
-
-    tempo, beat_frames = librosa.beat.beat_track(y=y_perc, sr=sr, hop_length=hop_length)
-    tempo = np.asarray(tempo).item()
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length).tolist()
-
-    beat_chroma = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
-    n_beats = len(beat_times)
-    beat_chroma = beat_chroma[:, :n_beats]
-
-    key_idx = int(np.argmax(np.mean(beat_chroma, axis=1)))
-    key = NOTES[key_idx]
-    diatonic = _diatonic_set(key_idx)
-
-    KEY_BOOST = 0.6
-    simple_bias = np.zeros((len(SIMPLE_CHORDS), 1))
-    for ci, name in enumerate(SIMPLE_CHORDS):
-        if name in diatonic:
-            simple_bias[ci, 0] = KEY_BOOST
-
-    simple_path = _viterbi_decode(SIMPLE_MATRIX, SIMPLE_CHORDS, beat_chroma,
-                                  self_prob=0.92, emission_bias=simple_bias)
-
-    PROMOTE_THRESH = 0.12
-    norms = np.linalg.norm(beat_chroma, axis=0, keepdims=True)
-    norms[norms == 0] = 1.0
-    bc_normed = beat_chroma / norms
-    full_sim = TEMPLATE_MATRIX @ bc_normed
-
-    final_path = []
-    for bi, simple_name in enumerate(simple_path):
-        simple_score = full_sim[ALL_CHORDS.index(simple_name), bi]
-        best_ext_name  = simple_name
-        best_ext_score = simple_score
-        for ext_name, parent in _EXTENDED_TO_SIMPLE.items():
-            if parent == simple_name:
-                ext_score = full_sim[ALL_CHORDS.index(ext_name), bi]
-                if ext_score > best_ext_score + PROMOTE_THRESH:
-                    best_ext_name  = ext_name
-                    best_ext_score = ext_score
-        final_path.append(best_ext_name)
-
-    try:
-        from analyze_chords import _uniformize_beat_times
-        beat_times = _uniformize_beat_times(beat_times, float(tempo))
-    except Exception:
-        pass
-    iv_tail = (beat_times[1] - beat_times[0]) if len(beat_times) >= 2 else 0.5
-
-    merged = []
-    for i, chord_name in enumerate(final_path):
-        start = beat_times[i]
-        end = beat_times[i + 1] if i + 1 < len(beat_times) else start + iv_tail
-        if merged and merged[-1]['chord'] == chord_name:
-            merged[-1]['end'] = round(end, 3)
-        else:
-            merged.append({'chord': chord_name, 'start': round(start, 3), 'end': round(end, 3)})
-
-    return merged, tempo, key, beat_times
+    """Run chord analysis via Beat This! + BTC."""
+    from analyze_chords import analyze as _analyze_chords
+    data = _analyze_chords(audio_path)
+    return data['chords'], data['bpm'], data['key'], data['beat_times'], data.get('downbeats')
 
 
 def _clean_title(name: str) -> str:
@@ -742,20 +601,9 @@ FLY_WORKER_APP = os.environ.get('FLY_WORKER_APP', 'seechords-worker')
 FLY_WORKER_IMAGE = os.environ.get('FLY_WORKER_IMAGE', f'registry.fly.io/{os.environ.get("FLY_WORKER_APP", "seechords-worker")}:latest')
 
 
-def _spawn_worker(job_id: str, video_id: str, title: str = ''):
+def _spawn_worker(job_id: str, video_id: str, title: str = '', skip_download: bool = False):
     """Spawn an ephemeral Fly Machine to run chord analysis."""
     import requests as req
-    cookie_env = _worker_youtube_cookie_env()
-    if cookie_env.get('YTDLP_COOKIES_B64'):
-        n = len(cookie_env['YTDLP_COOKIES_B64'])
-        print(f'[SeeChords] Worker spawn: forwarding YTDLP_COOKIES_B64 ({n} base64 chars)', flush=True)
-    else:
-        print(
-            '[SeeChords] Worker spawn: no cookie payload from API env '
-            '(set YTDLP_COOKIES_B64 or YTDLP_COOKIEFILE on app `seechords`; '
-            'or set YTDLP_COOKIES_B64 on `seechords-worker` if Fly merges app secrets).',
-            flush=True,
-        )
     machine_env = {
         'JOB_ID': job_id,
         'VIDEO_ID': video_id,
@@ -764,12 +612,17 @@ def _spawn_worker(job_id: str, video_id: str, title: str = ''):
         'TURSO_AUTH_TOKEN': TURSO_TOKEN,
         'USE_BTC': '1',
         'USE_BEAT_THIS': '1',
-        **cookie_env,
     }
+    if skip_download:
+        machine_env['SKIP_YTDLP_DOWNLOAD'] = '1'
     # Forward WAV cache secret so workers can upload/download cached audio
     wav_secret = os.environ.get('WAV_CACHE_SECRET', '')
     if wav_secret:
         machine_env['WAV_CACHE_SECRET'] = wav_secret
+    # Forward ntfy topic for failure notifications
+    ntfy_topic = os.environ.get('NTFY_TOPIC', '')
+    if ntfy_topic:
+        machine_env['NTFY_TOPIC'] = ntfy_topic
     resp = req.post(
         f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
         headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
@@ -779,6 +632,7 @@ def _spawn_worker(job_id: str, video_id: str, title: str = ''):
                 'env': machine_env,
                 'guest': {'cpu_kind': 'shared', 'cpus': 2, 'memory_mb': 4096},
                 'auto_destroy': True,
+                'restart': {'policy': 'no'},
             },
         },
         timeout=30,
@@ -790,6 +644,131 @@ def _spawn_worker(job_id: str, video_id: str, title: str = ''):
     _set_job(job_id, worker_id=machine_id)
     return machine_id
 
+
+def _cleanup_stuck_workers():
+    """Destroy worker machines stuck in 'started' state that exhausted restarts.
+
+    Fly machines that hit max restart attempts stay in 'started' but aren't
+    actually doing work. Detect them by checking events for 'exit' with
+    non-zero status repeated many times, or simply destroy any 'started'
+    machine older than 15 minutes (workers should finish well within that).
+    """
+    import requests as req
+    try:
+        resp = req.get(
+            f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
+            headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
+            timeout=10,
+        )
+        if not resp.ok:
+            return 0
+        destroyed = 0
+        for m in resp.json():
+            state = m.get('state', '')
+            if state not in ('created', 'started'):
+                continue
+            # Check if machine has been running for more than 15 minutes
+            created = m.get('created_at', '')
+            if not created:
+                continue
+            try:
+                from datetime import datetime, timezone
+                # Parse ISO timestamp
+                ct = created.replace('Z', '+00:00')
+                created_dt = datetime.fromisoformat(ct)
+                age_min = (datetime.now(timezone.utc) - created_dt).total_seconds() / 60
+                if age_min > 15:
+                    mid = m.get('id', '')
+                    print(f'[SeeChords] Destroying stuck worker {mid} (age={age_min:.0f}min, state={state})', flush=True)
+                    req.delete(
+                        f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines/{mid}?force=true',
+                        headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
+                        timeout=10,
+                    )
+                    destroyed += 1
+            except Exception as e:
+                print(f'[SeeChords] Error checking worker age: {e}', flush=True)
+        return destroyed
+    except Exception:
+        return 0
+
+
+@app.route('/api/internal/wav-cache/<video_id>', methods=['GET'])
+def get_wav_cache(video_id):
+    """Serve cached WAV file. Auth: Bearer WAV_CACHE_SECRET.
+    Checks disk first, then Turso temp storage."""
+    if not _wav_cache_auth_ok():
+        return jsonify({'error': 'Unauthorized.'}), 401
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+    # Try disk
+    disk_path = os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')
+    if os.path.isfile(disk_path):
+        return send_file(disk_path, mimetype='audio/wav')
+    # Try Turso temp
+    try:
+        con = _get_db()
+        row = con.execute('SELECT wav_data FROM wav_cache_backups WHERE video_id = ?', (video_id,)).fetchone()
+        con.close()
+        if row and row[0]:
+            with open(disk_path, 'wb') as f:
+                f.write(row[0])
+            return send_file(disk_path, mimetype='audio/wav')
+    except Exception as e:
+        print(f'[SeeChords] WAV cache Turso read failed: {e}', flush=True)
+    return jsonify({'error': 'Not found.'}), 404
+
+
+@app.route('/api/internal/wav-cache/<video_id>', methods=['PUT'])
+def put_wav_cache(video_id):
+    """Store WAV in Turso (temp, cleaned after analysis). Auth: Bearer WAV_CACHE_SECRET."""
+    if not _wav_cache_auth_ok():
+        return jsonify({'error': 'Unauthorized.'}), 401
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+    data = request.get_data()
+    if len(data) < 4096:
+        return jsonify({'error': 'WAV too small.'}), 400
+    max_wav_bytes = 60 * 1024 * 1024  # 60 MB (~11 min stereo 44.1 kHz)
+    if len(data) > max_wav_bytes:
+        return jsonify({'error': f'WAV too large ({len(data) // (1024*1024)} MB, max {max_wav_bytes // (1024*1024)} MB).'}), 413
+    # Save to disk (for same-machine GET)
+    disk_path = os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')
+    with open(disk_path, 'wb') as f:
+        f.write(data)
+    # Save to Turso (for cross-machine GET)
+    try:
+        con = _get_db()
+        con.execute('INSERT OR REPLACE INTO wav_cache_backups (video_id, wav_data, bytes, created_at) VALUES (?, ?, ?, ?)',
+                    (video_id, data, len(data), int(time.time())))
+        con.commit()
+        con.close()
+    except Exception as e:
+        print(f'[SeeChords] WAV Turso write failed: {e}', flush=True)
+        return jsonify({'error': 'WAV saved to disk but Turso backup failed. Cross-machine access may not work.'}), 500
+    return jsonify({'ok': True, 'bytes': len(data)})
+
+
+@app.route('/api/internal/wav-cache/<video_id>', methods=['DELETE'])
+def delete_wav_cache(video_id):
+    """Clean up temp WAV after analysis. Auth: Bearer WAV_CACHE_SECRET."""
+    if not _wav_cache_auth_ok():
+        return jsonify({'error': 'Unauthorized.'}), 401
+    if not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+    disk_path = os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')
+    try:
+        os.remove(disk_path)
+    except OSError:
+        pass
+    try:
+        con = _get_db()
+        con.execute('DELETE FROM wav_cache_backups WHERE video_id = ?', (video_id,))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+    return jsonify({'ok': True})
 
 
 @app.route('/api/internal/wav-cache-purge', methods=['POST'])
@@ -1409,13 +1388,7 @@ def _do_ingest(job_id: str, audio_path: str, chord_text: str, song_name: str):
             'songName': song_name,
         })
 
-        # Detect if the sheet has lyrics (spatial chord+lyric pairs)
-        has_lyrics = _sheet_has_lyrics(chord_text)
-
-        if has_lyrics:
-            _do_ingest_lyric_align(job_id, audio_path, chord_text, song_name)
-        else:
-            _do_ingest_beat_align(job_id, audio_path, chord_text, song_name)
+        _do_ingest_beat_align(job_id, audio_path, chord_text, song_name)
 
     except Exception as exc:
         import traceback
@@ -1424,103 +1397,6 @@ def _do_ingest(job_id: str, audio_path: str, chord_text: str, song_name: str):
             'status': 'error', 'message': f'Ingest failed: {exc}',
         })
 
-
-def _sheet_has_lyrics(chord_text):
-    """Check if a chord sheet has lyrics below chord lines (UG-style)."""
-    lines = chord_text.strip().split('\n')
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped or re.match(r'^\[.*\]$', stripped):
-            continue
-        # If this is a chord line and the next non-empty line is NOT chords
-        # and NOT a section header → it's probably lyrics
-        tokens = stripped.split()
-        clean = [t for t in tokens if t not in ('|', '/', '||')]
-        clean = [t for t in clean if not re.match(r'^\[.*\]$', t)]
-        if clean and sum(1 for t in clean if _CHORD_RE.match(t)) / len(clean) >= 0.5:
-            # Found a chord line — check what follows
-            for j in range(i + 1, len(lines)):
-                next_stripped = lines[j].strip()
-                if not next_stripped:
-                    continue
-                if re.match(r'^\[.*\]$', next_stripped):
-                    break
-                # Is the next non-empty line NOT a chord line?
-                next_tokens = next_stripped.split()
-                next_clean = [t for t in next_tokens if t not in ('|', '/')]
-                if next_clean:
-                    chord_ratio = sum(1 for t in next_clean if _CHORD_RE.match(t)) / len(next_clean)
-                    if chord_ratio < 0.5:
-                        return True  # Found lyrics below chords
-                break
-    return False
-
-
-def _do_ingest_lyric_align(job_id, audio_path, chord_text, song_name):
-    """Lyric-aware ingest: Whisper transcription + spatial chord parsing."""
-    with _ingest_lock:
-        _ingest_jobs[job_id]['message'] = 'Transcribing audio (Whisper)…'
-
-    # Import the lyric aligner
-    lyric_align_path = os.path.join(
-        os.path.dirname(__file__), 'tools', 'lyric_align.py')
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('lyric_align', lyric_align_path)
-    lyric_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(lyric_mod)
-
-    # Run the full pipeline
-    segments, transcript_words, spatial_chords, lyrics_words = \
-        lyric_mod.align_chords_via_lyrics(chord_text, audio_path, model_size='base')
-
-    if not segments:
-        _update_ingest_job(job_id, {
-            'status': 'error',
-            'message': 'Lyric alignment failed — no chords or no transcript.',
-        })
-        return
-
-    # Also run beat detection for BPM/key info
-    with _ingest_lock:
-        _ingest_jobs[job_id]['message'] = 'Detecting key & BPM…'
-    chords_data, bpm_val, key_val, beat_times = detect_chords(audio_path)
-
-    # Build JSON segments
-    json_segments = []
-    for seg in segments:
-        json_segments.append({
-            'start': round(seg['start'], 3) if seg['start'] is not None else 0,
-            'end': round(seg['end'], 3) if seg['end'] is not None else 0,
-            'sheetChord': seg['chord'],
-            'predChord': seg['chord'],  # in lyric mode, sheet IS the truth
-            'nBeats': 0,
-            'matches': 0,
-            'match': True,
-            'word': seg.get('word', ''),
-            'section': seg.get('section', ''),
-            'confidence': seg.get('confidence', 0),
-        })
-
-    # Build transcript for UI display
-    transcript_json = [
-        {'word': w['word'], 'start': w['start'], 'end': w['end']}
-        for w in transcript_words
-    ]
-
-    _update_ingest_job(job_id, {
-        'status': 'done',
-        'alignMode': 'lyric',
-        'songName': song_name,
-        'key': key_val,
-        'bpm': round(bpm_val, 1),
-        'beatTimes': beat_times,
-        'segments': json_segments,
-        'transcript': transcript_json,
-        'sheetChords': [s['chord'] for s in segments],
-        'lyricsWords': lyrics_words,
-        'audioPath': audio_path,
-        'chordText': chord_text,
-    })
 
 
 def _do_ingest_beat_align(job_id, audio_path, chord_text, song_name):
@@ -1830,20 +1706,107 @@ def _require_ingest_auth(f):
     return decorated
 
 
+# Brute-force protection: track failed login attempts per IP
+_login_failures = {}  # {ip: (count, first_failure_time)}
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SECS = 300  # 5 minutes
+
+
+def _check_rate_limit():
+    """Return error response if IP is locked out, else None."""
+    ip = request.remote_addr
+    if ip in _login_failures:
+        count, first_time = _login_failures[ip]
+        if count >= _LOGIN_MAX_ATTEMPTS:
+            if time.time() - first_time < _LOGIN_LOCKOUT_SECS:
+                return render_template('ingest.html', login_error='Too many attempts. Try again in a few minutes.', show_login=True)
+            del _login_failures[ip]
+    return None
+
+
+def _record_failure():
+    ip = request.remote_addr
+    if ip in _login_failures:
+        count, first_time = _login_failures[ip]
+        _login_failures[ip] = (count + 1, first_time)
+    else:
+        _login_failures[ip] = (1, time.time())
+
+
+def _clear_failures():
+    _login_failures.pop(request.remote_addr, None)
+
+
 @app.route('/ingest/login', methods=['POST'])
 def ingest_login():
+    locked = _check_rate_limit()
+    if locked:
+        return locked
+
     password = request.form.get('password', '')
+    totp_code = request.form.get('totp_code', '')
+
     if not INGEST_PASSWORD:
         return redirect('/ingest')
-    if password == INGEST_PASSWORD:
+
+    # Step 1: password submitted, MFA enabled → show TOTP prompt
+    if password and not totp_code and MFA_TOTP_SECRET:
+        if _check_ingest_password(password):
+            session['ingest_pw_ok'] = True
+            return render_template('ingest.html', show_mfa=True)
+        _record_failure()
+        return render_template('ingest.html', login_error='Incorrect password', show_login=True)
+
+    # Step 2: TOTP code submitted (password was already verified)
+    if totp_code and session.get('ingest_pw_ok') and MFA_TOTP_SECRET:
+        import pyotp
+        totp = pyotp.TOTP(MFA_TOTP_SECRET)
+        if totp.verify(totp_code, valid_window=1):
+            session.pop('ingest_pw_ok', None)
+            session['ingest_auth'] = True
+            _clear_failures()
+            return redirect('/ingest')
+        _record_failure()
+        return render_template('ingest.html', show_mfa=True, login_error='Invalid code. Try again.')
+
+    # No MFA configured → password only
+    if _check_ingest_password(password):
         session['ingest_auth'] = True
+        _clear_failures()
         return redirect('/ingest')
+    _record_failure()
     return render_template('ingest.html', login_error='Incorrect password', show_login=True)
+
+
+@app.route('/ingest/mfa-setup')
+def ingest_mfa_setup():
+    """Show QR code for TOTP setup. Only works when MFA_TOTP_SECRET is set."""
+    if not MFA_TOTP_SECRET:
+        return 'MFA_TOTP_SECRET env var not set. Generate one with: python -c "import pyotp; print(pyotp.random_base32())"', 400
+    if not session.get('ingest_auth'):
+        return redirect('/ingest')
+    import pyotp, qrcode, io, base64
+    totp = pyotp.TOTP(MFA_TOTP_SECRET)
+    uri = totp.provisioning_uri(name='admin', issuer_name='SeeChords')
+    img = qrcode.make(uri)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+    return f'''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>SeeChords MFA Setup</title>
+<style>body{{background:#0a0e27;color:#eee;font-family:system-ui;display:flex;flex-direction:column;align-items:center;padding-top:80px;}}
+img{{border-radius:12px;margin:20px 0;}} code{{background:#16213e;padding:4px 10px;border-radius:4px;}}</style></head>
+<body><h2>Scan with your authenticator app</h2>
+<img src="data:image/png;base64,{qr_b64}" width="250" height="250">
+<p>Or enter manually: <code>{MFA_TOTP_SECRET}</code></p>
+<p style="color:#888;font-size:0.85em;">After scanning, log out and log back in to test MFA.</p>
+<a href="/ingest" style="color:#e94560;">← Back to Ingest</a></body></html>'''
 
 
 @app.route('/ingest/logout', methods=['POST'])
 def ingest_logout():
     session.pop('ingest_auth', None)
+    session.pop('ingest_pw_ok', None)
     return redirect('/ingest')
 
 
@@ -2548,6 +2511,50 @@ def _list_versions(video_id):
     return jsonify({'versions': versions})
 
 
+@app.route('/api/ingest/change-password', methods=['POST'])
+@_require_ingest_auth
+def change_password():
+    """Update the ingest password (stored as SHA-256 hash in Turso)."""
+    import hashlib
+    data = request.get_json(silent=True) or {}
+    pw = data.get('password', '')
+    if len(pw) < 8:
+        return jsonify({'error': 'Minimum 8 characters.'}), 400
+    pw_hash = hashlib.sha256(pw.encode()).hexdigest()
+    con = _get_db()
+    con.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ingest_password_hash', ?)", (pw_hash,))
+    con.commit()
+    con.close()
+    return jsonify({'ok': True})
+
+
+@app.route('/api/ingest/stats')
+@_require_ingest_auth
+def ingest_stats():
+    """Return admin stats about chord_versions."""
+    con = _get_db()
+    row = con.execute(
+        """SELECT
+            COUNT(DISTINCT video_id),
+            COUNT(*),
+            SUM(CASE WHEN source = 'verified' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source = ? THEN 1 ELSE 0 END),
+            COUNT(DISTINCT CASE WHEN downbeats IS NULL OR downbeats = '[]' THEN video_id END)
+        FROM chord_versions""",
+        (CURRENT_MODEL_SOURCE,),
+    ).fetchone()
+    con.close()
+    return jsonify({
+        'total_songs': row[0],
+        'total_versions': row[1],
+        'verified': row[2],
+        'model': row[3],
+        'model_name': CURRENT_MODEL_DISPLAY,
+        'model_source': CURRENT_MODEL_SOURCE,
+        'missing_downbeats': row[4],
+    })
+
+
 @app.route('/api/ingest/versions')
 @_require_ingest_auth
 def ingest_all_versions():
@@ -2555,7 +2562,7 @@ def ingest_all_versions():
     con = _get_db()
     rows = con.execute('''
         SELECT cv.version_id, cv.video_id, cv.title, cv.key, cv.bpm,
-               cv.source, cv.analyzed_at, cv.is_active, cv.chords
+               cv.source, cv.analyzed_at, cv.is_active
         FROM chord_versions cv
         WHERE cv.source IN ('ingest-edit', 'verified')
         ORDER BY cv.analyzed_at DESC
@@ -2565,19 +2572,48 @@ def ingest_all_versions():
     versions = []
     seen_videos = set()
     for r in rows:
-        d = {
-            'versionId': r[0], 'videoId': r[1], 'title': r[2],
-            'key': r[3], 'bpm': r[4], 'source': r[5],
-            'analyzedAt': r[6], 'isActive': bool(r[7]),
-        }
-        chords = json.loads(r[8]) if isinstance(r[8], str) else (r[8] or [])
-        d['segmentCount'] = len(chords)
         vid = r[1]
         if vid in seen_videos:
             continue
         seen_videos.add(vid)
-        versions.append(d)
+        versions.append({
+            'versionId': r[0], 'videoId': vid, 'title': r[2],
+            'key': r[3], 'bpm': r[4], 'source': r[5],
+            'analyzedAt': r[6], 'isActive': bool(r[7]),
+        })
     return jsonify({'versions': versions})
+
+
+@app.route('/api/ingest/all-songs')
+@_require_ingest_auth
+def ingest_all_songs():
+    """List all active songs for the re-analyze management view."""
+    con = _get_db()
+    rows = con.execute('''
+        SELECT cv.version_id, cv.video_id, cv.title, cv.key, cv.bpm,
+               cv.source, cv.analyzed_at,
+               length(cv.chords) as chord_len, length(cv.beat_times) as beat_len
+        FROM chord_versions cv
+        WHERE cv.is_active = 1
+        ORDER BY cv.analyzed_at DESC
+    ''').fetchall()
+    con.close()
+
+    songs = []
+    seen = set()
+    for r in rows:
+        vid = r[1]
+        if vid in seen:
+            continue
+        seen.add(vid)
+        songs.append({
+            'videoId': vid, 'title': r[2],
+            'key': r[3], 'bpm': r[4], 'source': r[5],
+            'analyzedAt': r[6],
+            'hasChords': (r[7] or 0) > 2,
+            'hasBeats': (r[8] or 0) > 2,
+        })
+    return jsonify({'songs': songs})
 
 
 @app.route('/api/version/<int:version_id>')
@@ -2585,7 +2621,7 @@ def get_version(version_id):
     """Load a specific version by version_id."""
     con = _get_db()
     row = con.execute(
-        'SELECT * FROM chord_versions WHERE version_id = ?',
+        f'SELECT {_CV_SELECT} FROM chord_versions WHERE version_id = ?',
         (version_id,),
     ).fetchone()
     con.close()
@@ -2598,37 +2634,126 @@ def get_version(version_id):
 
 # ── Batch re-analysis ────────────────────────────────────────────
 
-@app.route('/api/ingest/reanalyze-batch', methods=['POST'])
+@app.route('/api/ingest/reanalyze-peek')
 @_require_ingest_auth
-def reanalyze_batch():
-    """Queue re-analysis for next batch of songs missing downbeats.
-    Call repeatedly until remaining=0."""
-    BATCH_SIZE = 5
+def reanalyze_peek():
+    """Return the next song needing reanalysis without spawning a worker.
+
+    Accepts `?exclude=id1,id2,...` to skip videos the client has already given up on.
+    """
+    exclude_raw = request.args.get('exclude', '')
+    exclude_ids = [x for x in (s.strip() for s in exclude_raw.split(',')) if x and re.match(r'^[a-zA-Z0-9_-]{11}$', x)]
     con = _get_db()
-    rows = con.execute(
-        "SELECT DISTINCT video_id, title FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]' LIMIT ?",
-        (BATCH_SIZE,),
-    ).fetchall()
+    base_where = "source LIKE 'chordmini-btc-v2%' AND (downbeats IS NULL OR downbeats = '[]')"
+    params = ()
+    if exclude_ids:
+        placeholders = ','.join('?' * len(exclude_ids))
+        base_where += f" AND video_id NOT IN ({placeholders})"
+        params = tuple(exclude_ids)
+    row = con.execute(
+        f"SELECT DISTINCT video_id, title FROM chord_versions WHERE {base_where} LIMIT 1",
+        params,
+    ).fetchone()
     remaining = con.execute(
-        "SELECT COUNT(DISTINCT video_id) FROM chord_versions WHERE downbeats IS NULL OR downbeats = '[]'"
+        f"SELECT COUNT(DISTINCT video_id) FROM chord_versions WHERE {base_where}",
+        params,
+    ).fetchone()[0]
+    con.close()
+    if not row:
+        return jsonify({'remaining': 0})
+    return jsonify({'videoId': row[0], 'title': row[1] or '', 'remaining': remaining})
+
+
+@app.route('/api/ingest/reanalyze-next', methods=['POST'])
+@_require_ingest_auth
+def reanalyze_next():
+    """Queue re-analysis for ONE song. Accepts skip_download flag for local-audio workflow."""
+    data = request.get_json(silent=True) or {}
+    skip_download = bool(data.get('skip_download'))
+
+    # Check if any worker is already running
+    try:
+        import requests as req
+        resp = req.get(
+            f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
+            headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
+            timeout=10,
+        )
+        if resp.ok:
+            active = sum(1 for m in resp.json() if m.get('state') in ('created', 'started'))
+            if active > 0:
+                return jsonify({'error': f'Worker still running ({active} active). Wait for it to finish.', 'active': active}), 429
+    except Exception:
+        pass
+
+    con = _get_db()
+    row = con.execute(
+        "SELECT DISTINCT video_id, title FROM chord_versions WHERE source LIKE 'chordmini-btc-v2%' AND (downbeats IS NULL OR downbeats = '[]') LIMIT 1",
+    ).fetchone()
+    remaining = con.execute(
+        "SELECT COUNT(DISTINCT video_id) FROM chord_versions WHERE source LIKE 'chordmini-btc-v2%' AND (downbeats IS NULL OR downbeats = '[]')"
     ).fetchone()[0]
     con.close()
 
-    if not rows:
-        return jsonify({'queued': 0, 'remaining': 0, 'message': 'All songs already have downbeats.'})
+    if not row:
+        return jsonify({'queued': False, 'remaining': 0, 'message': 'All songs have downbeats.'})
 
-    queued = []
-    for r in rows:
-        video_id, title = r[0], r[1] or ''
-        job_id = f'reanalyze-{video_id}-{int(time.time())}'
-        try:
-            _create_job(job_id, video_id, status='pending', message='Queued for re-analysis')
-            _spawn_worker(job_id, video_id, title)
-            queued.append(video_id)
-        except Exception as e:
-            print(f'[SeeChords] Failed to queue {video_id}: {e}', flush=True)
+    video_id, title = row[0], row[1] or ''
+    job_id = f'reanalyze-{video_id}-{int(time.time())}'
+    try:
+        _create_job(job_id, video_id, status='pending', message='Queued for re-analysis')
+        _spawn_worker(job_id, video_id, title, skip_download=skip_download)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    return jsonify({'queued': len(queued), 'remaining': remaining - len(queued), 'videoIds': queued})
+    return jsonify({'queued': True, 'remaining': remaining - 1, 'jobId': job_id, 'videoId': video_id, 'title': title})
+
+
+# ── Re-analyze a specific song (override) ────────────────────────
+
+@app.route('/api/ingest/reanalyze/<video_id>', methods=['POST'])
+@_require_ingest_auth
+def reanalyze_single(video_id):
+    """Force re-analysis for a specific video, even if it already has data."""
+    if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+
+    # Clean up stuck workers (e.g. those that exhausted max restart attempts)
+    _cleanup_stuck_workers()
+    # Check if any worker is already running
+    try:
+        import requests as req
+        resp = req.get(
+            f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
+            headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},
+            timeout=10,
+        )
+        if resp.ok:
+            active = sum(1 for m in resp.json() if m.get('state') in ('created', 'started'))
+            if active > 0:
+                return jsonify({'error': f'Worker still running ({active} active). Wait for it to finish.'}), 429
+    except Exception:
+        pass
+
+    # Look up title and remove all existing versions so the worker's result is the only one
+    con = _get_db()
+    row = con.execute(
+        "SELECT title FROM chord_versions WHERE video_id = ? LIMIT 1",
+        (video_id,),
+    ).fetchone()
+    title = row[0] if row else ''
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = ?", (video_id, CURRENT_MODEL_SOURCE))
+    con.commit()
+    con.close()
+
+    job_id = f'reanalyze-{video_id}-{int(time.time())}'
+    try:
+        _create_job(job_id, video_id, status='pending', message='Queued for re-analysis (override)')
+        _spawn_worker(job_id, video_id, title)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'queued': True, 'jobId': job_id, 'videoId': video_id, 'title': title})
 
 
 # ── Delete a version ──────────────────────────────────────────────
@@ -2646,6 +2771,23 @@ def delete_version(version_id):
     con.commit()
     con.close()
     return jsonify({'deleted': True, 'versionId': version_id})
+
+
+@app.route('/api/ingest/song/<video_id>', methods=['DELETE'])
+@_require_ingest_auth
+def delete_song(video_id):
+    """Delete ALL versions for a video."""
+    if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+    con = _get_db()
+    count = con.execute('SELECT COUNT(*) FROM chord_versions WHERE video_id = ?', (video_id,)).fetchone()[0]
+    if not count:
+        con.close()
+        return jsonify({'error': 'Song not found.'}), 404
+    con.execute('DELETE FROM chord_versions WHERE video_id = ?', (video_id,))
+    con.commit()
+    con.close()
+    return jsonify({'deleted': True, 'videoId': video_id, 'versionsDeleted': count})
 
 
 # ── Promote a version to verified (human-checked) ─────────────────

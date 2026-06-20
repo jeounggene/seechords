@@ -97,7 +97,6 @@
 
 .sc-badge-key    { border-color: rgba(255,215,0,.25); color: rgba(255,215,0,.75); }
 .sc-badge-bpm    { border-color: rgba(108,71,255,.25); color: rgba(180,123,255,.75); }
-.sc-badge-source { border-color: rgba(255,255,255,.15); color: rgba(255,255,255,.45); font-size: 1.2rem; }
 
 .sc-controls {
   display: flex;
@@ -166,40 +165,46 @@
 }
 
 .sc-version-select {
-  background: var(--sc-bg-input, #1a1a36);
-  border: 1px solid var(--sc-border);
-  color: var(--sc-text-muted);
-  font-size: 1.188rem;
-  font-weight: 500;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.15);
+  color: rgba(255,255,255,.45);
+  font-size: 1.275rem;
+  font-weight: 600;
   cursor: pointer;
-  padding: 6px 6px 3px;
-  line-height: 1.2;
-  border-radius: 6px;
-  max-width: 260px;
+  padding: 5px 14px;
+  line-height: 1;
+  border-radius: 99px;
+  max-width: 280px;
   outline: none;
-  transition: border-color .2s;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: border-color .2s, color .2s;
 }
 .sc-version-select:hover, .sc-version-select:focus {
-  border-color: var(--sc-accent);
-  color: var(--sc-text);
+  border-color: rgba(255,255,255,.3);
+  color: rgba(255,255,255,.65);
 }
 
 .sc-reupload-btn {
   background: none;
-  border: 1px solid var(--sc-border);
-  color: var(--sc-text-muted);
+  border: 1px solid rgba(100,180,255,.25);
+  color: rgba(100,180,255,.5);
   font-size: 1.275rem;
   font-weight: 600;
   cursor: pointer;
   padding: 4px 10px;
-  border-radius: 6px;
+  border-radius: 99px;
   transition: color .2s, background .2s, border-color .2s;
   white-space: nowrap;
 }
 .sc-reupload-btn:hover {
-  color: var(--sc-text);
-  background: var(--sc-bg-input);
-  border-color: var(--sc-accent);
+  color: #64b4ff;
+  background: rgba(100,180,255,.1);
+  border-color: rgba(100,180,255,.4);
+}
+.sc-reupload-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* ── Compare Button (header) ── */

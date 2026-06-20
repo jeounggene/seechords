@@ -1,6 +1,7 @@
-"""BTC (Bi-directional Transformer for Chords) model — inference-only.
+"""ChordMini BTC (Bi-directional Transformer for Chords) model — inference-only.
 
-Adapted from ptnghia-j/ChordMini (MIT license).
+Adapted from ChordMini: https://github.com/ptnghia-j/ChordMini (MIT license).
+See CREDITS.md for the full citation.
 8-layer bi-directional self-attention on 144-bin CQT, 170 chord classes.
 """
 import torch

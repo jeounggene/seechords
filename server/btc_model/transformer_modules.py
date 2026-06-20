@@ -1,6 +1,7 @@
-"""Core transformer building blocks for BTC model (inference-only).
+"""Core transformer building blocks for ChordMini's BTC model (inference-only).
 
-Adapted from ptnghia-j/ChordMini (MIT license).
+Adapted from ChordMini: https://github.com/ptnghia-j/ChordMini (MIT license).
+See CREDITS.md for the full citation.
 """
 import torch
 import torch.nn as nn

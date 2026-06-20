@@ -156,8 +156,15 @@ def main():
     parser.add_argument('--per-song', action='store_true')
     parser.add_argument('--use-gold-beats', action='store_true',
                         help='Use gold beat annotations where available (isolates chord accuracy from beat errors)')
+    parser.add_argument('--beat-aggregation', type=str, default=None,
+                        choices=['logit', 'majority'],
+                        help='Per-beat mapping: logit=sum smoothed logits (default); '
+                             'majority=legacy frame vote. Overrides BTC_BEAT_AGGREGATION.')
     parser.add_argument('--cpu', action='store_true')
     args = parser.parse_args()
+
+    if args.beat_aggregation:
+        os.environ['BTC_BEAT_AGGREGATION'] = args.beat_aggregation
 
     import torch
 
@@ -170,11 +177,17 @@ def main():
 
     # Load BTC via server code (matches production exactly)
     from analyze_chords import (
-        _load_btc_model, _extract_cqt, _gaussian_smooth_logits, _majority_filter,
+        _load_btc_model,
+        _extract_cqt,
+        _gaussian_smooth_logits,
+        _majority_filter,
+        _btc_beat_aggregation_mode,
     )
     from btc_model.vocab import btc_idx_to_tier1
 
+    beat_mode = _btc_beat_aggregation_mode()
     print(f"Device: {device}")
+    print(f"BTC beat aggregation: {beat_mode} (set BTC_BEAT_AGGREGATION or --beat-aggregation)")
     model, _, btc_mean, btc_std = _load_btc_model()
     print(f"BTC loaded (mean={btc_mean:.4f}, std={btc_std:.4f})")
 
@@ -264,29 +277,46 @@ def main():
             logit_count[logit_count == 0] = 1.0
             avg_logits = logit_sum / logit_count[:, np.newaxis]
             avg_logits = _gaussian_smooth_logits(avg_logits, kernel_size=9)
-            frame_preds = avg_logits.argmax(axis=1).astype(np.int64)
-            frame_preds = _majority_filter(frame_preds, kernel_size=9)
 
-            # Beat-sync via majority vote
             hop_dur = 2048 / 22050.0
             pred_names = []
-            for bi in range(len(beat_times)):
-                t_start = beat_times[bi]
-                t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
-                f_start = max(0, int(round(t_start / hop_dur)))
-                f_end = min(n_frames, int(round(t_end / hop_dur)))
-                if f_end <= f_start:
-                    f_end = f_start + 1
-                if f_start >= n_frames:
-                    pred_names.append('N')
-                    continue
-                seg = frame_preds[f_start:min(f_end, n_frames)]
-                if len(seg) == 0:
-                    pred_names.append('N')
-                    continue
-                counts = np.bincount(seg, minlength=170)
-                winner = int(counts.argmax())
-                pred_names.append(btc_idx_to_tier1(winner))
+            if beat_mode == 'majority':
+                frame_preds = avg_logits.argmax(axis=1).astype(np.int64)
+                frame_preds = _majority_filter(frame_preds, kernel_size=9)
+                for bi in range(len(beat_times)):
+                    t_start = beat_times[bi]
+                    t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
+                    f_start = max(0, int(round(t_start / hop_dur)))
+                    f_end = min(n_frames, int(round(t_end / hop_dur)))
+                    if f_end <= f_start:
+                        f_end = f_start + 1
+                    if f_start >= n_frames:
+                        pred_names.append('N')
+                        continue
+                    seg = frame_preds[f_start:min(f_end, n_frames)]
+                    if len(seg) == 0:
+                        pred_names.append('N')
+                        continue
+                    counts = np.bincount(seg, minlength=170)
+                    winner = int(counts.argmax())
+                    pred_names.append(btc_idx_to_tier1(winner))
+            else:
+                for bi in range(len(beat_times)):
+                    t_start = beat_times[bi]
+                    t_end = beat_times[bi + 1] if bi + 1 < len(beat_times) else t_start + 0.5
+                    f_start = max(0, int(round(t_start / hop_dur)))
+                    f_end = min(n_frames, int(round(t_end / hop_dur)))
+                    if f_end <= f_start:
+                        f_end = f_start + 1
+                    if f_start >= n_frames:
+                        pred_names.append('N')
+                        continue
+                    window = avg_logits[f_start:min(f_end, n_frames)]
+                    if len(window) == 0:
+                        pred_names.append('N')
+                        continue
+                    winner = int(window.sum(axis=0).argmax())
+                    pred_names.append(btc_idx_to_tier1(winner))
 
             n = len(gt)
             pred_names = (pred_names[:n] + ['N'] * max(0, n - len(pred_names)))[:n]

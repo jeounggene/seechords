@@ -37,6 +37,10 @@ import libsql_experimental as libsql
 _SUCCESS_YTDLP_PLAYER_CLIENT = None
 NTFY_TOPIC = os.environ.get('NTFY_TOPIC', '')
 
+# Chord-analysis model version tag stored in chord_versions.source.
+# We run ChordMini's BTC model (ptnghia-j/ChordMini, MIT) — see CREDITS.md.
+MODEL_SOURCE = 'chordmini-btc-v2.1'
+
 
 def _ntfy(title: str, message: str, priority: str = 'high', tags: str = 'warning'):
     """Send a push notification via ntfy.sh. Silently ignores errors."""
@@ -110,15 +114,15 @@ def _update_job(job_id, **kwargs):
 
 def _cache_put(video_id, title, key, bpm, chords_data, beat_times, downbeats=None):
     con = _get_db()
-    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = 'btc-v2.1'", (video_id,))
+    con.execute("DELETE FROM chord_versions WHERE video_id = ? AND source = ?", (video_id, MODEL_SOURCE))
     con.execute('''
         INSERT INTO chord_versions
             (video_id, title, key, bpm, chords, beat_times, downbeats, source, analyzed_at, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'btc-v2.1', ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     ''', (video_id, title, key, bpm,
           json.dumps(chords_data), json.dumps(beat_times),
           json.dumps(downbeats) if downbeats else None,
-          int(time.time())))
+          MODEL_SOURCE, int(time.time())))
     con.commit()
     version_id = con.execute('SELECT last_insert_rowid()').fetchone()[0]
     con.close()
@@ -398,7 +402,7 @@ def main():
             bpm=round(bpm_val, 1),
             key=key_val,
             beat_times=beat_times,
-            source='btc-v2.1',
+            source=MODEL_SOURCE,
         )
         print(f'[Worker] Job complete! versionId={version_id}', flush=True)
 

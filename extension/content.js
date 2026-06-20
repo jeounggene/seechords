@@ -12,16 +12,16 @@
 // ─── State ────────────────────────────────────────────────
 function _sourceLabel(src) {
   if (src === 'verified') return 'Made by Jin';
-  if (src && src.startsWith('btc-')) return 'Made by SeeChords ' + src.replace('btc-', 'Model ');
-  if (src === 'user-uploaded') return 'Made by SeeChords Model v1';
-  return 'Made by SeeChords';
+  if (src) return 'Made by ' + src;
+  return 'unknown';
 }
 
 let currentVideoId  = null;
 let chordData       = null;  // full API response
 let chords          = [];    // [{chord, start, end}, …]
 let beatTimes       = [];
-let downbeatSet     = new Set(); // beat indices that are downbeats
+let barPhase        = 0;         // beat index offset for bar grid
+let timeSigNum      = 4;         // beats per bar (3 or 4 typically)
 let beatChords      = [];    // [{chord, beatStart, beatCount}, …]
 let bpm             = 120;
 let baseKey         = '';
@@ -72,6 +72,55 @@ function _isoToDisplay(iso) {
   const suffix = _ISO_TO_DISPLAY[quality];
   if (suffix !== undefined) return root + suffix + bass;
   return root + quality + bass;
+}
+
+// ─── Downbeat / bar grid (matches web player logic) ──────
+function computeDownbeatInfo(db) {
+  barPhase = 0;
+  timeSigNum = 4;
+  if (!beatTimes.length || !db.length) return;
+
+  // Snap each downbeat timestamp to its nearest beat index
+  const snapped = [];
+  for (const dt of db) {
+    let best = 0, bestDiff = Infinity;
+    for (let i = 0; i < beatTimes.length; i++) {
+      const diff = Math.abs(beatTimes[i] - dt);
+      if (diff < bestDiff) { bestDiff = diff; best = i; }
+      else if (beatTimes[i] > dt) break;
+    }
+    snapped.push(best);
+  }
+  const uniq = Array.from(new Set(snapped)).sort((a, b) => a - b);
+  if (uniq.length < 2) return;
+
+  // Mode gap between consecutive snapped downbeats → time signature
+  const gaps = [];
+  for (let i = 1; i < uniq.length; i++) gaps.push(uniq[i] - uniq[i - 1]);
+  const counts = new Map();
+  for (const g of gaps) counts.set(g, (counts.get(g) || 0) + 1);
+  let mode = 4, modeCount = 0;
+  for (const [g, c] of counts) {
+    if (c > modeCount || (c === modeCount && g < mode)) { mode = g; modeCount = c; }
+  }
+  if (mode === 2 || mode === 3 || mode === 4) timeSigNum = mode;
+  else if (mode === 6) timeSigNum = 3;
+  else if (mode === 8) timeSigNum = 4;
+  else timeSigNum = 4;
+
+  // Choose phase that maximizes snapped downbeats on grid
+  let bestPhase = 0, bestHits = -1;
+  for (let p = 0; p < timeSigNum; p++) {
+    let hits = 0;
+    for (const bi of uniq) if (((bi - p) % timeSigNum + timeSigNum) % timeSigNum === 0) hits++;
+    if (hits > bestHits) { bestHits = hits; bestPhase = p; }
+  }
+  barPhase = bestPhase;
+}
+
+function isBarStart(bi) {
+  if (bi < barPhase) return false;
+  return ((bi - barPhase) % timeSigNum) === 0;
 }
 
 // ─── Chord Diagrams ───────────────────────────────────────
@@ -172,7 +221,7 @@ const CHORD_DIAGRAMS = {
   'Bbsus4': { f:[-1,1,3,3,4,1],  b:1 },
   'Bsus4':  { f:[-1,2,4,4,0,0],  b:1 },
 
-  // ── BTC 170-class families: 6, m6, mM7, dim7 (12 roots × 4) ──
+  // ── ChordMini BTC 170-class families: 6, m6, mM7, dim7 (12 roots × 4) ──
   'C6': { f:[-1,3,2,2,1,0], b:1 },
   'Cm6': { f:[-1,3,1,2,1,3], b:1 },
   'CmM7': { f:[-1,1,3,2,3,-1], b:3 },
@@ -719,7 +768,6 @@ function injectOverlay() {
       <div class="sc-badges">
         <span class="sc-badge sc-badge-key" id="scKeyBadge">Key: —</span>
         <span class="sc-badge sc-badge-bpm" id="scBpmBadge">BPM: —</span>
-        <span class="sc-badge sc-badge-source" id="scSourceBadge" style="display:none;"></span>
       </div>
       <div class="sc-controls">
         <button class="sc-ctrl-btn" id="scTransposeDown" title="Transpose down">▼</button>
@@ -733,8 +781,8 @@ function injectOverlay() {
       </div>
       <div class="sc-version-controls" id="scVersionControls" style="display:none;">
         <select class="sc-version-select" id="scVersionSelect" title="Switch chord version"></select>
-        <button class="sc-reupload-btn" id="scReuploadBtn" title="Re-analyze chords">↻ Re-analyze</button>
       </div>
+      <button class="sc-reupload-btn" id="scReuploadBtn" title="Re-analyze chords" style="display:none;">↻ Re-analyze</button>
       <button type="button" class="sc-toggle-btn" id="scToggle" title="Move panel below the video">▾</button>
     </div>
     <div class="sc-body" id="scBody">
@@ -961,7 +1009,8 @@ function showChords() {
   if (body) body.style.display = '';
 }
 
-const CURRENT_MODEL_SOURCE = 'btc-v2';
+// ChordMini BTC model tag — must match server CURRENT_MODEL_SOURCE (app.py).
+const CURRENT_MODEL_SOURCE = 'chordmini-btc-v2.1';
 
 function updateReanalyzeButtonVisibility() {
   const btn = document.getElementById('scReuploadBtn');
@@ -1000,7 +1049,7 @@ function renderTimeline() {
   beatTimes.forEach((_, bi) => {
     const div = document.createElement('div');
     div.className = 'sc-beat-block';
-    if (downbeatSet.size > 0 ? downbeatSet.has(bi) : bi % 4 === 0) div.classList.add('sc-measure-start');
+    if (isBarStart(bi)) div.classList.add('sc-measure-start');
     div.dataset.bi = bi;
 
     const gi = beatToGroup[bi];
@@ -1525,19 +1574,7 @@ function loadChordData(data) {
     return c;
   });
   beatTimes = data.beat_times || [];
-  // Build downbeat set: map downbeat timestamps to nearest beat indices
-  downbeatSet = new Set();
-  const db = data.downbeats || [];
-  if (db.length) {
-    db.forEach(dt => {
-      let closest = 0, minDiff = Infinity;
-      for (let i = 0; i < beatTimes.length; i++) {
-        const diff = Math.abs(beatTimes[i] - dt);
-        if (diff < minDiff) { minDiff = diff; closest = i; }
-      }
-      if (minDiff < 0.15) downbeatSet.add(closest);
-    });
-  }
+  computeDownbeatInfo(data.downbeats || []);
   bpm       = data.bpm        || 120;
   baseKey   = data.key        || '';
   transposeSteps  = 0;
@@ -1550,17 +1587,17 @@ function loadChordData(data) {
 
   currentChordSource = data.source || null;
 
-  // Attribution badge
-  const scSourceBadge = document.getElementById('scSourceBadge');
-  if (scSourceBadge) {
-    const sourceLabel = _sourceLabel(currentChordSource);
-    scSourceBadge.textContent = sourceLabel;
-    scSourceBadge.style.display = '';
-  }
-
-  // Show the version controls
+  // Show the version controls with source label as default
   const vc = document.getElementById('scVersionControls');
-  if (vc) vc.style.display = 'flex';
+  const sel = document.getElementById('scVersionSelect');
+  if (vc && sel) {
+    vc.style.display = 'flex';
+    sel.style.display = '';
+    sel.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.textContent = _sourceLabel(currentChordSource);
+    sel.appendChild(opt);
+  }
   renderTimeline();
   showChords();
 
@@ -1583,11 +1620,13 @@ function fetchVersionsList(videoId, activeVersionId) {
     }
     sel.innerHTML = '';
     if (resp.versions.length <= 1) {
-      sel.style.display = 'none';
+      // Keep showing source label as single non-interactive option
+      const opt = document.createElement('option');
+      opt.textContent = _sourceLabel(currentChordSource);
+      sel.appendChild(opt);
       updateReanalyzeButtonVisibility();
       return;
     }
-    sel.style.display = '';
     resp.versions.forEach((v) => {
       const opt = document.createElement('option');
       opt.value = v.versionId;
@@ -1599,7 +1638,7 @@ function fetchVersionsList(videoId, activeVersionId) {
       }
       const label = _sourceLabel(v.source);
       opt.textContent = `${label} · ${v.key || '?'} · ${v.segmentCount} segs · ${date}`;
-      if (v.versionId === activeVersionId || v.isActive) opt.selected = true;
+      if (activeVersionId ? v.versionId === activeVersionId : v.isActive) opt.selected = true;
       sel.appendChild(opt);
     });
     updateReanalyzeButtonVisibility();

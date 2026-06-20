@@ -7,3 +7,6 @@ librosa>=0.10.0
 pdfplumber>=0.10.0
 libsql-experimental>=0.0.55
 requests>=2.31.0
+yt-dlp>=2024.1.0
+pyotp>=2.9.0
+qrcode[pil]>=7.4

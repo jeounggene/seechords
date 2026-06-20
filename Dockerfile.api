@@ -12,11 +12,8 @@ WORKDIR /app
 COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy server code (no ML models needed)
+# Copy server code (tools/ subdir included)
 COPY server/ /app/
-
-# Training tools needed for /api/align endpoint
-COPY training/tools /app/training/tools
 
 ENV FLASK_ENV=production
 

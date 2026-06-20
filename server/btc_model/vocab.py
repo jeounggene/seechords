@@ -1,6 +1,7 @@
-"""BTC 170-class chord vocabulary and mapping to SeeChords display names.
+"""ChordMini BTC 170-class chord vocabulary and mapping to SeeChords display names.
 
-Adapted from ptnghia-j/ChordMini (MIT license).
+Adapted from ChordMini: https://github.com/ptnghia-j/ChordMini (MIT license).
+See CREDITS.md for the full citation.
 """
 
 PITCH_CLASS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -53,12 +54,12 @@ _QUALITY_TO_DISPLAY = {
     'aug': 'aug',
     'sus2': 'sus2',
     'sus4': 'sus4',
-    'dim7': 'dim',
-    'hdim7': 'm7',
-    'minmaj7': 'm',
-    'maj6': '',
-    'min6': 'm',
-    'aug7': '7',
+    'dim7': 'dim7',
+    'hdim7': 'm7b5',
+    'minmaj7': 'mM7',
+    'maj6': '6',
+    'min6': 'm6',
+    'aug7': '7#5',
 }
 
 _QUALITY_TO_TIER1 = {

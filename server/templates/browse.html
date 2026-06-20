@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeeChords — Browse Songs</title>
+  <style>
+    :root {
+      --bg: #080812;
+      --bg-card: #12122a;
+      --border: #2a2a50;
+      --accent: #6c47ff;
+      --accent-hover: #8264ff;
+      --text: #f0f0f8;
+      --muted: #8888aa;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    a { color: var(--accent-hover); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+    header {
+      padding: 24px 0 32px;
+      background: linear-gradient(135deg, #110d2e 0%, #1a0938 45%, #080812 100%);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 40px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.43em;
+      font-size: 1.6rem;
+      margin-bottom: 8px;
+    }
+    .brand img { width: 1.5556em; height: 1.5556em; border-radius: 0.214em; }
+    .brand span { font-weight: 800; color: #fff; }
+    .page-title { font-size: 1.5rem; font-weight: 700; color: #fff; margin-bottom: 6px; }
+    .page-sub { color: var(--muted); font-size: 0.95rem; }
+    .search-row {
+      margin-bottom: 28px;
+      display: flex;
+      gap: 10px;
+    }
+    .filter-input {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.95rem;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .filter-input:focus { border-color: var(--accent); }
+    .filter-input::placeholder { color: var(--muted); }
+    .count { color: var(--muted); font-size: 0.88rem; margin-bottom: 16px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 14px;
+    }
+    .song-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color .15s, transform .15s;
+      text-decoration: none;
+      display: block;
+      color: var(--text);
+    }
+    .song-card:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+    .song-thumb {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      display: block;
+      background: #0a0a18;
+    }
+    .song-info { padding: 10px 12px 12px; }
+    .song-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .song-meta { display: flex; gap: 8px; flex-wrap: wrap; }
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(108,71,255,.18);
+      color: #b4a0ff;
+    }
+    .empty { color: var(--muted); text-align: center; padding: 60px 0; font-size: 1rem; }
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 0 32px;
+      margin-top: 60px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    footer .wrap { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+    footer nav { display: flex; gap: 16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a class="brand" href="/">
+        <img src="{{ url_for('static', filename='icon128.png') }}" alt="SeeChords">
+        <span>SeeChords</span>
+      </a>
+      <div class="page-title">Browse Songs</div>
+      <div class="page-sub">{{ songs|length }} song{{ 's' if songs|length != 1 }} analyzed</div>
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <div class="search-row">
+        <input class="filter-input" id="filterInput" type="search" placeholder="Filter by title…" autocomplete="off">
+      </div>
+      <div class="count" id="countLabel"></div>
+      <div class="grid" id="songGrid">
+        {% for song in songs %}
+        <a class="song-card" href="/play?v={{ song.videoId }}" data-title="{{ song.title|lower }}">
+          <img class="song-thumb" src="{{ song.thumbnail }}" alt="{{ song.title }}" loading="lazy">
+          <div class="song-info">
+            <div class="song-title">{{ song.title }}</div>
+            <div class="song-meta">
+              {% if song.key %}<span class="badge">{{ song.key }}</span>{% endif %}
+              {% if song.bpm %}<span class="badge">{{ song.bpm }} BPM</span>{% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+      <div class="empty" id="emptyMsg" style="display:none;">No songs match your filter.</div>
+    </div>
+  </main>
+  <footer>
+    <div class="wrap">
+      <span>SeeChords</span>
+      <nav>
+        <a href="/play">Player</a>
+        <a href="/privacy">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+  <script>
+    const cards = Array.from(document.querySelectorAll('.song-card'));
+    const countLabel = document.getElementById('countLabel');
+    const emptyMsg = document.getElementById('emptyMsg');
+    function updateCount(n) {
+      countLabel.textContent = n === cards.length ? `${n} songs` : `${n} of ${cards.length} songs`;
+    }
+    updateCount(cards.length);
+    document.getElementById('filterInput').addEventListener('input', function() {
+      const q = this.value.toLowerCase().trim();
+      let visible = 0;
+      cards.forEach(c => {
+        const match = !q || c.dataset.title.includes(q);
+        c.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      updateCount(visible);
+      emptyMsg.style.display = visible === 0 ? '' : 'none';
+    });
+  </script>
+</body>
+</html>
