@@ -31,10 +31,6 @@ import traceback
 import urllib.error
 import urllib.request
 
-import libsql_experimental as libsql
-
-# Set after a successful yt-dlp download so --get-title uses the same player client.
-_SUCCESS_YTDLP_PLAYER_CLIENT = None
 NTFY_TOPIC = os.environ.get('NTFY_TOPIC', '')
 
 # Chord-analysis model version tag stored in chord_versions.source.
@@ -56,16 +52,102 @@ def _ntfy(title: str, message: str, priority: str = 'high', tags: str = 'warning
     except Exception:
         pass
 
-def _ytdlp_player_client_args():
-    """Return extractor args for YouTube player client selection.
+# Ordered ladder of YouTube player-client sets to try across download attempts.
+# Each attempt uses a DIFFERENT client set so a client-specific bot block can be
+# bypassed by the next attempt. `default,mweb` matches what worked in isolation;
+# `tv,web_safari` and `android_vr,mweb` are alternate profiles with different
+# bot-detection behavior. The bgutil PO-token plugin supplies GVS tokens for all.
+YTDLP_CLIENT_LADDER = ['default,mweb', 'tv,web_safari', 'android_vr,mweb']
 
-    Uses mweb as primary (recommended for PO token on datacenter IPs),
-    with default clients as fallback. The PO token plugin handles GVS auth.
+
+def _client_ladder():
+    """Return the client ladder to rotate through.
+
+    An explicit YTDLP_YOUTUBE_PLAYER_CLIENT override pins a single client (no
+    rotation); otherwise the full ladder is used.
     """
     o = (os.environ.get('YTDLP_YOUTUBE_PLAYER_CLIENT') or '').strip()
     if o and o.lower() not in ('none', 'off', '-'):
-        return ['--extractor-args', f'youtube:player_client={o}']
-    return ['--extractor-args', 'youtube:player_client=default,mweb']
+        return [o]
+    return list(YTDLP_CLIENT_LADDER)
+
+
+def _extractor_args_for(client: str):
+    """Build yt-dlp extractor args pinning a specific player client."""
+    return ['--extractor-args', f'youtube:player_client={client}']
+
+
+def _is_bot_block(stderr: str) -> bool:
+    """True if yt-dlp stderr indicates YouTube's 'not a bot' / sign-in block."""
+    s = (stderr or '').lower()
+    return 'sign in' in s or 'not a bot' in s
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential backoff (3, 6, 12…) capped at 30s, so retries don't hammer the IP."""
+    return min(30.0, 3.0 * (2 ** attempt))
+
+
+def _download_audio(ytdlp, yt_url, out_template, job_id, hb_state=None,
+                    max_attempts=3, sleep=time.sleep):
+    """Download bestaudio with whole-extraction retry + player-client rotation.
+
+    YouTube returns its "Sign in to confirm you're not a bot" block as a *hard*
+    extractor error, so yt-dlp's own --retries never recovers it. This re-invokes
+    yt-dlp with a rotated player client and exponential backoff. An isolated
+    retry almost always succeeds (verified against the live datacenter IP).
+
+    Returns (audio_path, successful_client). Raises RuntimeError if every
+    attempt fails.
+    """
+    ladder = _client_ladder()
+    last_err = ''
+    saw_bot_block = False
+    for attempt in range(max_attempts):
+        client = ladder[attempt % len(ladder)]
+        if hb_state is not None:
+            hb_state['client'] = client
+        # Clear any partial file from a prior attempt so _find_downloaded_audio_file
+        # can't resolve a stale, incomplete download.
+        _cleanup_partial_downloads(job_id)
+        cmd = (
+            [ytdlp]
+            + _extractor_args_for(client)
+            + [
+                '-f', 'bestaudio/best',
+                '--no-playlist', '--no-check-certificates',
+                '--retries', '3',
+                '--fragment-retries', '3',
+                '--remote-components', 'ejs:github',
+                '-o', out_template, yt_url,
+            ]
+        )
+        print(f'[Worker] yt-dlp attempt {attempt + 1}/{max_attempts} '
+              f'client={client} (PO token auth)', flush=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            stderr = result.stderr or ''
+            audio_path = _find_downloaded_audio_file(job_id)
+            if result.returncode == 0 and audio_path:
+                print(f'[Worker] yt-dlp ok (attempt {attempt + 1}, client={client}) '
+                      f'-> {audio_path}', flush=True)
+                return audio_path, client
+            last_err = stderr[-800:] if stderr else 'yt-dlp download failed'
+            if _is_bot_block(stderr):
+                saw_bot_block = True
+        except subprocess.TimeoutExpired:
+            last_err = 'yt-dlp timed out'
+        print(f'[Worker] attempt {attempt + 1} failed (client={client}): '
+              f'{last_err[-200:]}', flush=True)
+        if attempt + 1 < max_attempts:
+            sleep(_backoff_seconds(attempt))
+
+    if saw_bot_block:
+        _ntfy(
+            'SeeChords: YouTube download blocked',
+            f'Video blocked after {max_attempts} attempts. PO token may need update.',
+        )
+    raise RuntimeError(f'Download failed after {max_attempts} attempts: {last_err}')
 
 
 def _cleanup_partial_downloads(job_id: str) -> None:
@@ -87,6 +169,7 @@ def _find_downloaded_audio_file(job_id: str) -> str | None:
 
 
 def _get_db():
+    import libsql_experimental as libsql
     return libsql.connect(
         database=os.environ['TURSO_DATABASE_URL'],
         auth_token=os.environ['TURSO_AUTH_TOKEN'],
@@ -228,9 +311,6 @@ def _upload_wav_cache_to_api(wav_path: str, video_id: str) -> None:
 
 
 def main():
-    global _SUCCESS_YTDLP_PLAYER_CLIENT
-    _SUCCESS_YTDLP_PLAYER_CLIENT = None
-
     job_id = os.environ.get('JOB_ID', '')
     video_id = os.environ.get('VIDEO_ID', '')
     title = os.environ.get('TITLE', '')
@@ -275,8 +355,6 @@ def main():
                 raise RuntimeError('yt-dlp not found')
 
             out_template = f'/tmp/{job_id}_audio.%(ext)s'
-            client_args = _ytdlp_player_client_args()
-            print(f'[Worker] yt-dlp download with {client_args} (PO token auth)', flush=True)
 
             # Phase 1: Download audio
             _update_job(
@@ -293,38 +371,19 @@ def main():
             hb_t.start()
 
             try:
-                cmd = (
-                    [ytdlp]
-                    + client_args
-                    + [
-                        '-f', 'bestaudio/best',
-                        '--no-playlist', '--no-check-certificates',
-                        '--retries', '3',
-                        '--fragment-retries', '3',
-                        '--remote-components', 'ejs:github',
-                        '-o', out_template, yt_url,
-                    ]
+                # Retry with player-client rotation: YouTube's datacenter-IP bot
+                # block is intermittent and surfaces as a hard extractor error, so a
+                # single yt-dlp invocation is fragile. _download_audio re-attempts
+                # with a rotated player client until one gets through.
+                audio_path, success_client = _download_audio(
+                    ytdlp, yt_url, out_template, job_id, hb_state=hb_state,
                 )
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                last_stderr = result.stderr or ''
-                audio_path = _find_downloaded_audio_file(job_id) or ''
 
-                if result.returncode != 0 or not audio_path:
-                    err_msg = last_stderr[-800:] if last_stderr else 'yt-dlp download failed'
-                    if 'sign in' in err_msg.lower() or 'not a bot' in err_msg.lower():
-                        _ntfy(
-                            'SeeChords: YouTube download blocked',
-                            f'Video {video_id} blocked. PO token may need update.',
-                        )
-                    raise RuntimeError(f'Download failed: {err_msg}')
-
-                print(f'[Worker] yt-dlp download ok -> {audio_path}', flush=True)
-
-                # Get title from yt-dlp if not provided
+                # Get title from yt-dlp if not provided, reusing the client that worked.
                 if not title:
                     try:
                         t_result = subprocess.run(
-                            [ytdlp] + client_args
+                            [ytdlp] + _extractor_args_for(success_client)
                             + ['--get-title', '--no-playlist', yt_url],
                             capture_output=True, text=True, timeout=15,
                         )
