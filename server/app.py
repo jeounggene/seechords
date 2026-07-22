@@ -834,6 +834,98 @@ def analyze_youtube():
     return jsonify({'job_id': job_id, 'cached': False})
 
 
+# ── Public re-analyze (no auth) + guardrails ─────────────────────
+REANALYZE_COOLDOWN_SEC = 600          # a song may be re-analyzed at most once / 10 min
+_JOB_IN_FLIGHT_WINDOW_SEC = 15 * 60   # ignore pending/processing jobs older than this (stuck)
+
+
+def _has_cached_wav(video_id: str) -> bool:
+    """True if a WAV is cached for this video (on disk or in the Turso backup table),
+    so re-analysis can skip the YouTube download."""
+    if os.path.isfile(os.path.join(WAV_CACHE_DIR, f'{video_id}.wav')):
+        return True
+    try:
+        con = _get_db()
+        row = con.execute('SELECT 1 FROM wav_cache_backups WHERE video_id = ? LIMIT 1',
+                          (video_id,)).fetchone()
+        con.close()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _reanalyze_cooldown_remaining(video_id: str) -> int:
+    """Seconds left before this song may be re-analyzed again (0 if allowed now).
+
+    Based on the most recent analysis time of the current-model version; other
+    sources (e.g. 'verified') do not count.
+    """
+    con = _get_db()
+    row = con.execute(
+        'SELECT MAX(analyzed_at) FROM chord_versions WHERE video_id = ? AND source = ?',
+        (video_id, CURRENT_MODEL_SOURCE)).fetchone()
+    con.close()
+    last = (row[0] if row else None) or 0
+    if not last:
+        return 0
+    remaining = REANALYZE_COOLDOWN_SEC - (int(time.time()) - int(last))
+    return remaining if remaining > 0 else 0
+
+
+def _song_job_in_flight(video_id: str) -> bool:
+    """True if an analysis job for this video is currently pending/processing (updated
+    recently — a job older than the window is treated as abandoned/stuck)."""
+    cutoff = int(time.time()) - _JOB_IN_FLIGHT_WINDOW_SEC
+    con = _get_db()
+    row = con.execute(
+        "SELECT 1 FROM jobs WHERE video_id = ? AND status IN ('pending','processing')"
+        " AND updated_at >= ? LIMIT 1",
+        (video_id, cutoff)).fetchone()
+    con.close()
+    return row is not None
+
+
+@app.route('/api/reanalyze/<video_id>', methods=['POST'])
+def public_reanalyze(video_id):
+    """Public re-analysis of a song (no auth), with cooldown + cached-WAV guardrails.
+
+    One re-analysis per song per REANALYZE_COOLDOWN_SEC, no concurrent job per song, and
+    prefer the cached WAV (skip_download) so YouTube is only hit when the audio isn't
+    cached. The worker replaces only the current-model version on success, so verified
+    chords are untouched and a failed re-analysis leaves existing chords intact.
+    """
+    if not video_id or not re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+        return jsonify({'error': 'Invalid video ID.'}), 400
+
+    if _song_job_in_flight(video_id):
+        return jsonify({'error': 'Re-analysis already in progress. Please wait.'}), 429
+
+    remaining = _reanalyze_cooldown_remaining(video_id)
+    if remaining > 0:
+        mins = max(1, (remaining + 59) // 60)
+        return jsonify({
+            'error': f'This song was re-analyzed recently. Try again in {mins} min.',
+            'retryAfterSec': remaining,
+        }), 429
+
+    skip_download = _has_cached_wav(video_id)
+
+    con = _get_db()
+    row = con.execute('SELECT title FROM chord_versions WHERE video_id = ? LIMIT 1',
+                      (video_id,)).fetchone()
+    con.close()
+    title = (row[0] if row else '') or ''
+
+    job_id = f'reanalyze-{video_id}-{int(time.time())}'
+    try:
+        _create_job(job_id, video_id, status='pending', message='Queued for re-analysis')
+        _spawn_worker(job_id, video_id, title, skip_download=skip_download)
+    except Exception as e:
+        return jsonify({'error': f'Failed to start re-analysis: {e}'}), 500
+
+    return jsonify({'job_id': job_id, 'skipDownload': skip_download})
+
+
 def _search_youtube_fast(q, limit=8):
     """Search YouTube via the InnerTube API — fast, clean JSON, no page parsing."""
     import requests as req_lib, json

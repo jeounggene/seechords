@@ -2109,12 +2109,11 @@ function initPlayer(data) {
     btn.disabled = true;
     btn.textContent = '⏳ Analyzing…';
     try {
-      const res = await fetch('/api/ingest/reanalyze/' + currentVideoId, { method: 'POST' });
-      if (res.status === 401) { btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert('Auth required — log in via ingest page first.'); return; }
-      if (res.status === 429) { const d = await res.json(); btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert(d.error || 'Worker busy'); return; }
+      const res = await fetch('/api/reanalyze/' + currentVideoId, { method: 'POST' });
+      if (res.status === 429) { const d = await res.json(); btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert(d.error || 'Re-analyzed recently — try again shortly.'); return; }
       const data = await res.json();
       if (!res.ok) { btn.textContent = '↻ Re-analyze'; btn.disabled = false; alert(data.error || 'Failed'); return; }
-      const jobId = data.jobId;
+      const jobId = data.job_id || data.jobId;
       // Poll job status
       const poll = setInterval(async () => {
         try {
