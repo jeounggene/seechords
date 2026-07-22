@@ -623,6 +623,13 @@ def _spawn_worker(job_id: str, video_id: str, title: str = '', skip_download: bo
     ntfy_topic = os.environ.get('NTFY_TOPIC', '')
     if ntfy_topic:
         machine_env['NTFY_TOPIC'] = ntfy_topic
+    # Forward optional YouTube-auth secrets so the worker can escape a persistent
+    # datacenter-IP block: cookies (authenticated session) and/or a residential proxy.
+    # Whichever are set on the API are passed through; the worker uses what it gets.
+    for var in ('YTDLP_COOKIES_B64', 'YTDLP_PROXY', 'YTDLP_YOUTUBE_PLAYER_CLIENT'):
+        val = os.environ.get(var, '')
+        if val:
+            machine_env[var] = val
     resp = req.post(
         f'https://api.machines.dev/v1/apps/{FLY_WORKER_APP}/machines',
         headers={'Authorization': f'Bearer {FLY_API_TOKEN}'},

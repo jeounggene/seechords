@@ -88,19 +88,67 @@ def _backoff_seconds(attempt: int) -> float:
     return min(30.0, 3.0 * (2 ** attempt))
 
 
+def _normalize_cookies_b64(s: str) -> str:
+    """Strip whitespace/newlines so Fly secrets and shell quoting don't break base64 decode."""
+    return ''.join((s or '').split())
+
+
+def _prepare_ytdlp_auth(job_id: str):
+    """Assemble optional yt-dlp auth args for IP-blocked datacenter downloads.
+
+    YouTube persistently bot-blocks the shared Fly egress IP, which retrying can't
+    fix. Two IP-level escapes, both optional and used if configured:
+      * cookies — an authenticated session from YTDLP_COOKIES_B64 (base64 Netscape
+        cookie jar), written to a per-job temp file and passed via --cookies.
+      * proxy   — YTDLP_PROXY (e.g. a residential proxy URL), passed via --proxy.
+
+    Returns (args, cookie_file); cookie_file is None if no cookies were written.
+    """
+    args = []
+    cookie_file = None
+    b64 = _normalize_cookies_b64(os.environ.get('YTDLP_COOKIES_B64') or '')
+    if b64:
+        try:
+            import base64
+            cookie_file = f'/tmp/{job_id}_cookies.txt'
+            with open(cookie_file, 'wb') as f:
+                f.write(base64.b64decode(b64))
+            os.chmod(cookie_file, 0o600)
+            args += ['--cookies', cookie_file]
+            print('[Worker] Using YouTube cookies for yt-dlp', flush=True)
+        except Exception as e:
+            print(f'[Worker] cookie setup failed ({e}); continuing without cookies', flush=True)
+            cookie_file = None
+    proxy = (os.environ.get('YTDLP_PROXY') or '').strip()
+    if proxy:
+        args += ['--proxy', proxy]
+        try:
+            from urllib.parse import urlsplit
+            host = urlsplit(proxy).hostname or '?'
+        except Exception:
+            host = '?'
+        # Log the host only — never the credentials embedded in the URL.
+        print(f'[Worker] Routing yt-dlp through proxy host={host}', flush=True)
+    return args, cookie_file
+
+
 def _download_audio(ytdlp, yt_url, out_template, job_id, hb_state=None,
-                    max_attempts=3, sleep=time.sleep):
+                    max_attempts=3, sleep=time.sleep, auth_args=None):
     """Download bestaudio with whole-extraction retry + player-client rotation.
 
     YouTube returns its "Sign in to confirm you're not a bot" block as a *hard*
     extractor error, so yt-dlp's own --retries never recovers it. This re-invokes
-    yt-dlp with a rotated player client and exponential backoff. An isolated
-    retry almost always succeeds (verified against the live datacenter IP).
+    yt-dlp with a rotated player client and exponential backoff.
+
+    Rotation recovers *transient* blocks; `auth_args` (cookies and/or proxy from
+    _prepare_ytdlp_auth) is what escapes a *persistent* datacenter-IP block, which
+    rotation alone cannot. Both are applied together.
 
     Returns (audio_path, successful_client). Raises RuntimeError if every
     attempt fails.
     """
     ladder = _client_ladder()
+    auth_args = list(auth_args or [])
     last_err = ''
     saw_bot_block = False
     for attempt in range(max_attempts):
@@ -113,6 +161,7 @@ def _download_audio(ytdlp, yt_url, out_template, job_id, hb_state=None,
         cmd = (
             [ytdlp]
             + _extractor_args_for(client)
+            + auth_args
             + [
                 '-f', 'bestaudio/best',
                 '--no-playlist', '--no-check-certificates',
@@ -355,6 +404,8 @@ def main():
                 raise RuntimeError('yt-dlp not found')
 
             out_template = f'/tmp/{job_id}_audio.%(ext)s'
+            # Optional cookies/proxy to escape a persistent datacenter-IP block.
+            auth_args, _cookie_file = _prepare_ytdlp_auth(job_id)
 
             # Phase 1: Download audio
             _update_job(
@@ -377,13 +428,14 @@ def main():
                 # with a rotated player client until one gets through.
                 audio_path, success_client = _download_audio(
                     ytdlp, yt_url, out_template, job_id, hb_state=hb_state,
+                    auth_args=auth_args,
                 )
 
                 # Get title from yt-dlp if not provided, reusing the client that worked.
                 if not title:
                     try:
                         t_result = subprocess.run(
-                            [ytdlp] + _extractor_args_for(success_client)
+                            [ytdlp] + _extractor_args_for(success_client) + auth_args
                             + ['--get-title', '--no-playlist', yt_url],
                             capture_output=True, text=True, timeout=15,
                         )
@@ -474,7 +526,9 @@ def main():
             traceback.print_exc()
         sys.exit(1)
     finally:
-        for f in glob.glob(f'/tmp/{job_id}_audio.*'):
+        # Remove downloaded audio and the per-job cookie jar (contains session secrets).
+        for f in (glob.glob(f'/tmp/{job_id}_audio.*')
+                  + glob.glob(f'/tmp/{job_id}_cookies.txt')):
             try:
                 os.remove(f)
             except OSError:

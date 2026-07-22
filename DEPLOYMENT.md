@@ -60,8 +60,10 @@ Set with Fly **per app** where noted. Sensitive values use `fly secrets set`; no
 
 | Secret / env | Description |
 |--------------|-------------|
-| `YTDLP_COOKIES_B64` | Base64-encoded **Netscape** `cookies.txt` while logged into YouTube. Forwarded to each worker machine so **yt-dlp** can authenticate. Recommended for production. |
+| `YTDLP_COOKIES_B64` | Base64-encoded **Netscape** `cookies.txt` while logged into YouTube. Forwarded to each worker machine so **yt-dlp** can authenticate. Recommended for production. Use a **throwaway** account — automated use can get an account flagged. Refresh with `./scripts/refresh-cookies.sh`. |
 | `YTDLP_COOKIEFILE` | Alternative: path **on the API VM** to a readable `cookies.txt`; the API reads the file and sends it to workers as base64. Only works if the file exists in the running image or volume (uncommon). |
+| `YTDLP_PROXY` | Optional proxy URL (e.g. `http://user:pass@host:port` or `socks5://…`) for **yt-dlp**, forwarded to each worker. Use a **residential proxy** to bypass a persistent datacenter-IP block on the Fly egress IP — the durable fix when cookies alone aren't enough. |
+| `YTDLP_YOUTUBE_PLAYER_CLIENT` | Optional override to pin a single yt-dlp player client (e.g. `android_vr`) instead of the rotating ladder. Forwarded to workers. |
 | `FLY_WORKER_APP` | Default `seechords-worker` (set in `server/fly.toml`). Override if you rename the worker app. |
 | `FLY_WORKER_IMAGE` | Docker image tag for spawned workers (e.g. `registry.fly.io/seechords-worker:deployment-XXXXX`). **Must be updated after each worker deploy** — `./scripts/deploy-worker.sh` does this automatically. |
 | `SEECHORDS_DONATION_URL` / `SEECHORDS_CHROME_STORE_URL` | Marketing site links (optional). |
@@ -189,7 +191,7 @@ The extension calls the production API at **`https://seechords.fly.dev`** (see `
 |---------|------------------|
 | `COPY server/... not found` during Docker build | Deploy from **repo root** with `--config server/fly.toml` or `--config fly.worker.toml`, not from `server/`. |
 | Worker spawn fails | `FLY_API_TOKEN` valid; token can create machines on `FLY_WORKER_APP`; `seechords-worker` image exists in registry. |
-| YouTube “Sign in / bot” errors | `YTDLP_COOKIES_B64` on **`seechords`**; fresh cookies; worker image redeployed; yt-dlp updated in `Dockerfile.worker`. |
+| YouTube “Sign in / bot” errors | Set `YTDLP_COOKIES_B64` on **`seechords`** (fresh cookies via `./scripts/refresh-cookies.sh`); worker image redeployed; yt-dlp updated in `Dockerfile.worker`. If the datacenter IP is *persistently* blocked (all clients fail / HTTP 429), cookies may not be enough — set `YTDLP_PROXY` to a residential proxy. |
 | Old worker code running | Redeploy **`fly.worker.toml`** after changing worker code; API uses `registry.fly.io/seechords-worker:latest` by default. |
 
 ---
