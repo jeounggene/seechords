@@ -201,17 +201,21 @@ def _gate_leading_silence_beats(audio_eq, beat_times, chord_labels, sr, rel_frac
 
 
 def _uniformize_beat_times(beat_times, bpm):
-    """Replace beat times with a fixed grid t_i = t0 + i * (60/bpm).
+    """Optionally replace beat times with a fixed grid t_i = t0 + i * (60/bpm).
 
-    Chord labels stay index-aligned; only timestamps change. Used so the client
-    timeline scrolls at constant speed (equal px per beat ↔ equal seconds per beat).
+    DEFAULT: OFF — return the detector's NATIVE (irregular) beat times unchanged.
 
-    Set UNIFORM_BEAT_GRID=0 to keep detector-native irregular beat times.
+    The uniform grid was once used so the client timeline scrolled at a constant
+    speed, but it silently discards real timing: a live performance never holds an
+    exact tempo, so the grid drifts from the audio by i*(mean_interval - median_interval)
+    per beat, accumulating to ~a full beat by the end of a song (chords shown late).
+    The player snaps to the active beat, so native (irregular) times sync correctly
+    and are strictly more accurate. Set UNIFORM_BEAT_GRID=1 to restore the old grid.
     """
+    if os.environ.get('UNIFORM_BEAT_GRID', '0').lower() not in ('1', 'true', 'yes'):
+        return list(beat_times) if beat_times else []
     if not beat_times or len(beat_times) < 2:
         return list(beat_times) if beat_times else []
-    if os.environ.get('UNIFORM_BEAT_GRID', '1').lower() in ('0', 'false', 'no'):
-        return list(beat_times)
     bpm = float(max(40.0, min(300.0, float(bpm))))
     interval = 60.0 / bpm
     t0 = float(beat_times[0])
