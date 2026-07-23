@@ -84,8 +84,14 @@ def _is_bot_block(stderr: str) -> bool:
 
 
 def _backoff_seconds(attempt: int) -> float:
-    """Exponential backoff (3, 6, 12…) capped at 30s, so retries don't hammer the IP."""
-    return min(30.0, 3.0 * (2 ** attempt))
+    """Backoff between whole-extraction retries (8, 20, 32, 44s), capped at 45s.
+
+    Spread wide on purpose: YouTube's intermittent bot-block clears on a
+    minutes timescale, so a failing job's attempts should sample a ~2 min window
+    rather than one ~20s burst — that recovers far more transient blocks within a
+    single job. The cap keeps us from hammering the IP.
+    """
+    return min(45.0, 8.0 + 12.0 * attempt)
 
 
 def _normalize_cookies_b64(s: str) -> str:
@@ -133,12 +139,14 @@ def _prepare_ytdlp_auth(job_id: str):
 
 
 def _download_audio(ytdlp, yt_url, out_template, job_id, hb_state=None,
-                    max_attempts=3, sleep=time.sleep, auth_args=None):
+                    max_attempts=5, sleep=time.sleep, auth_args=None):
     """Download bestaudio with whole-extraction retry + player-client rotation.
 
     YouTube returns its "Sign in to confirm you're not a bot" block as a *hard*
     extractor error, so yt-dlp's own --retries never recovers it. This re-invokes
-    yt-dlp with a rotated player client and exponential backoff.
+    yt-dlp with a rotated player client and spread-out backoff. 5 attempts over a
+    ~2 min window (see _backoff_seconds) sample past the intermittent block; most
+    jobs still succeed on attempt 1, so only failing jobs pay the extra time.
 
     Rotation recovers *transient* blocks; `auth_args` (cookies and/or proxy from
     _prepare_ytdlp_auth) is what escapes a *persistent* datacenter-IP block, which

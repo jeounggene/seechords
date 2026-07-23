@@ -108,6 +108,21 @@ class DownloadRetryTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertIn('attempt', str(ctx.exception).lower())
 
+    def test_default_is_five_attempts(self):
+        # No max_attempts passed → uses the hardened default (5).
+        fake_run, calls = _make_fake_run([(1, BOT_ERR)] * 5, self.job_id)
+        with self.assertRaises(RuntimeError):
+            self._download(fake_run)
+        self.assertEqual(len(calls), 5)
+
+    def test_backoff_is_spread_and_capped(self):
+        vals = [worker._backoff_seconds(i) for i in range(6)]
+        self.assertEqual(vals[0], 8.0)                       # first retry not too slow
+        self.assertTrue(all(b <= a for a, b in zip(vals[1:], vals)))  # non-decreasing...
+        self.assertTrue(all(vals[i] <= vals[i + 1] for i in range(len(vals) - 1)))
+        self.assertLessEqual(max(vals), 45.0)               # capped
+        self.assertGreaterEqual(sum(vals[:4]), 100.0)       # ~2 min span across a failing job
+
     def test_client_ladder_is_distinct_across_attempts(self):
         fake_run, calls = _make_fake_run(
             [(1, BOT_ERR), (1, BOT_ERR), (1, BOT_ERR)], self.job_id)
