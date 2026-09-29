@@ -1618,18 +1618,13 @@ def _do_ingest_audio_only(job_id, audio_path, song_name):
 DEFAULT_CHROME_STORE_URL = (
     'https://chromewebstore.google.com/detail/SeeChords/bkmkkgblbnakckgdehgjaggnmglcljmj'
 )
-# Tip page; override with SEECHORDS_DONATION_URL if you switch platforms.
-DEFAULT_DONATION_URL = 'https://buymeacoffee.com/devjinn'
-
 
 @app.route('/')
 def site_home():
     """Marketing landing page for the SeeChords browser extension."""
-    donation_url = os.environ.get('SEECHORDS_DONATION_URL', DEFAULT_DONATION_URL).strip()
     chrome_store_url = os.environ.get('SEECHORDS_CHROME_STORE_URL', DEFAULT_CHROME_STORE_URL).strip()
     return render_template(
         'site_home.html',
-        donation_url=donation_url,
         chrome_store_url=chrome_store_url,
     )
 

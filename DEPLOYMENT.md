@@ -66,7 +66,7 @@ Set with Fly **per app** where noted. Sensitive values use `fly secrets set`; no
 | `YTDLP_YOUTUBE_PLAYER_CLIENT` | Optional override to pin a single yt-dlp player client (e.g. `android_vr`) instead of the rotating ladder. Forwarded to workers. |
 | `FLY_WORKER_APP` | Default `seechords-worker` (set in `server/fly.toml`). Override if you rename the worker app. |
 | `FLY_WORKER_IMAGE` | Docker image tag for spawned workers (e.g. `registry.fly.io/seechords-worker:deployment-XXXXX`). **Must be updated after each worker deploy** — `./scripts/deploy-worker.sh` does this automatically. |
-| `SEECHORDS_DONATION_URL` / `SEECHORDS_CHROME_STORE_URL` | Marketing site links (optional). |
+| `SEECHORDS_CHROME_STORE_URL` | Marketing site Chrome Web Store link (optional). |
 
 ### Worker app (`seechords-worker`)
 
