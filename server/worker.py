@@ -225,6 +225,40 @@ def _find_downloaded_audio_file(job_id: str) -> str | None:
     return max(matches, key=lambda p: os.path.getsize(p))
 
 
+def _fetch_oembed_title(video_id: str) -> str:
+    """Title via YouTube oEmbed — no cookies needed and not subject to the bot block."""
+    url = ('https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v='
+           + video_id + '&format=json')
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        return (json.loads(resp.read().decode('utf-8')).get('title') or '').strip()
+
+
+def _resolve_title(title: str, video_id: str, ytdlp_fallback=None) -> str:
+    """Return a real title for video_id.
+
+    A title equal to the video id is a placeholder left by an earlier bot-blocked
+    run (and forwarded by re-analysis), so it counts as missing. Order: provided
+    title → oEmbed → ytdlp_fallback() → video id.
+    """
+    title = (title or '').strip()
+    if title and title != video_id:
+        return title
+    try:
+        t = _fetch_oembed_title(video_id)
+        if t:
+            return t
+    except Exception as e:
+        print(f'[Worker] oEmbed title lookup failed: {e}', flush=True)
+    if ytdlp_fallback is not None:
+        try:
+            t = (ytdlp_fallback() or '').strip()
+            if t:
+                return t
+        except Exception as e:
+            print(f'[Worker] yt-dlp title lookup failed: {e}', flush=True)
+    return video_id
+
+
 def _get_db():
     import libsql_experimental as libsql
     return libsql.connect(
@@ -399,8 +433,7 @@ def main():
                 hb_state['active'] = False
                 hb_stop.set()
                 hb_t.join(timeout=3.0)
-            if not title:
-                title = video_id
+            title = _resolve_title(title, video_id)
             _update_job(
                 job_id, status='processing', progress=15,
                 message='Cached audio ready — analyzing chords…',
@@ -439,20 +472,18 @@ def main():
                     auth_args=auth_args,
                 )
 
-                # Get title from yt-dlp if not provided, reusing the client that worked.
-                if not title:
-                    try:
-                        t_result = subprocess.run(
-                            [ytdlp] + _extractor_args_for(success_client) + auth_args
-                            + ['--get-title', '--no-playlist', yt_url],
-                            capture_output=True, text=True, timeout=15,
-                        )
-                        if t_result.returncode == 0 and t_result.stdout.strip():
-                            title = t_result.stdout.strip()
-                        else:
-                            title = video_id
-                    except Exception:
-                        title = video_id
+                # Resolve title: provided → oEmbed → yt-dlp (reusing the client
+                # that worked) → video id. A title equal to the video id is a
+                # placeholder from an earlier blocked run and is re-fetched.
+                def _ytdlp_title():
+                    t_result = subprocess.run(
+                        [ytdlp] + _extractor_args_for(success_client) + auth_args
+                        + ['--get-title', '--no-playlist', yt_url],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    return t_result.stdout if t_result.returncode == 0 else ''
+
+                title = _resolve_title(title, video_id, ytdlp_fallback=_ytdlp_title)
 
                 print(f'[Worker] Downloaded audio: {os.path.getsize(audio_path)} bytes', flush=True)
                 _update_job(
