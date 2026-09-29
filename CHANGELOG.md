@@ -2,6 +2,28 @@
 
 All notable changes to SeeChords are documented here.
 
+## [1.1.4] — 2026-06-19
+### Added
+- Downbeat-aware bar grid: detects time signature (2/3/4) and bar phase from downbeats, matching the web player
+- Model tag updated to `chordmini-btc-v2.1` to match the server's current model
+
+### Changed
+- Source badge now reads "Made by <model>" using the server-reported source
+- Re-analyze button hidden by default (re-analysis is gated server-side by model version)
+
+## [1.1.3] — 2026-04-06
+### Added
+- Version selector to switch between analyses of the same song
+- Model version tracking; re-analysis blocked when the current model already produced the active version
+- Attribution labels ("Made by Jin" / "Made by SeeChords")
+- Chord duration progress bar on the active chord card
+- Downbeat-aware measure grouping in the timeline
+
+### Fixed
+- Chord diagrams: flat-to-sharp enharmonic fallback so flat-named chords render
+- Chord diagrams: 52 entries converted from absolute to relative fret values
+- Vertical text alignment in badges and the version select dropdown
+
 ## [1.1.2] — 2026-04-03
 ### Added
 - Popup toggle to hide SeeChords entirely on YouTube pages
